@@ -118,6 +118,8 @@ async def test_full_path(env, db):
     await say(dp, bot, USER, "123")  # неверный
     assert "неверный" in s.texts(USER)[-1]
     await say(dp, bot, USER, code)
+    admin_docs = [c for c in s.calls if isinstance(c, SendDocument) and c.chat_id == ADMIN]
+    assert len(admin_docs) == 2  # админ получил подписанные договор и заявку
     pay_msg = s.texts(USER)[-1]
     assert "https://shumkadance.tb.ru/" in pay_msg and "<b>4500</b>" in pay_msg
     order_id = db.conn.execute("SELECT id FROM orders").fetchone()[0]

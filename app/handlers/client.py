@@ -283,7 +283,10 @@ async def enter_code(msg: Message, state: FSMContext, db: Database, cfg: Config,
         try:
             await bot.send_message(
                 admin, f"✍️ {client.full_name} подписал(а) заявку «{offer.title}», "
-                       f"{fmt_price(offer.price)} ₽. Ждём оплату.")
+                       f"{fmt_price(offer.price)} ₽. Ждём оплату.\n"
+                       f"Телефон: {client.phone}, e-mail: {client.email}")
+            for f in signed.files:
+                await bot.send_document(admin, FSInputFile(f))
         except Exception:
             log.warning("не удалось уведомить админа %s", admin)
 
