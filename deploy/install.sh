@@ -44,11 +44,14 @@ if [[ ! -f "$DIR/.env" ]]; then
   read -rsp "Токен бота от @BotFather: " BOT_TOKEN; echo
   read -rp  "Telegram ID админов через запятую (Шума, Ксеня): " ADMIN_IDS
   read -rsp "API-ключ SMS.ru (пусто = тестовый режим, код в чате): " SMSRU; echo
-  read -rp  "ФИО ИП полностью: " EX_NAME
-  read -rp  "ИНН ИП: " EX_INN
-  read -rp  "ОГРНИП: " EX_OGRN
-  read -rp  "Город для договора (без «г.»): " EX_CITY
-  read -rp  "Часовой пояс [Europe/Moscow]: " TZ_IN
+  # Значения по умолчанию — из ЕГРИП (ИП Шумкова А. М.); Enter оставляет их.
+  read -rp  "ФИО ИП [Шумкова Анастасия Михайловна]: " EX_NAME
+  read -rp  "ИНН ИП [390507309923]: " EX_INN
+  read -rp  "ОГРНИП [325390000087556]: " EX_OGRN
+  read -rp  "Город для договора [Калининград]: " EX_CITY
+  read -rp  "Часовой пояс [Europe/Kaliningrad]: " TZ_IN
+  EX_NAME=${EX_NAME:-Шумкова Анастасия Михайловна}; EX_INN=${EX_INN:-390507309923}
+  EX_OGRN=${EX_OGRN:-325390000087556}; EX_CITY=${EX_CITY:-Калининград}
   PROVIDER=console; [[ -n "$SMSRU" ]] && PROVIDER=smsru
   umask 077
   cat > "$DIR/.env" <<EOF
@@ -62,7 +65,7 @@ EXECUTOR_NAME=$EX_NAME
 EXECUTOR_INN=$EX_INN
 EXECUTOR_OGRNIP=$EX_OGRN
 EXECUTOR_CITY=$EX_CITY
-TIMEZONE=${TZ_IN:-Europe/Moscow}
+TIMEZONE=${TZ_IN:-Europe/Kaliningrad}
 EOF
   chown bot:bot "$DIR/.env"
 fi
