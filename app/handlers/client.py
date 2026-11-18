@@ -13,7 +13,7 @@ from aiogram.types import (CallbackQuery, FSInputFile, InlineKeyboardButton,
                            InlineKeyboardMarkup, KeyboardButton, Message,
                            ReplyKeyboardMarkup, ReplyKeyboardRemove)
 
-from ..config import Config
+from ..config import ROOT, Config
 from ..db import Client, Database, Offer
 from ..services import Draft, fmt_price, make_draft, preview_pdfs, sign_draft
 from ..signing import check_code, issue_code
@@ -21,6 +21,8 @@ from ..sms import SmsError, SmsSender
 
 router = Router(name="client")
 log = logging.getLogger(__name__)
+
+WELCOME_PHOTO = ROOT / "assets" / "welcome.jpg"
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 DATE_RE = re.compile(r"^\d{2}\.\d{2}\.\d{4}$")
@@ -72,6 +74,10 @@ async def start(msg: Message, command: CommandObject, state: FSMContext, db: Dat
             await state.update_data(offer_id=offer.id)
             return await open_offer(msg, state, db, offer)
         await msg.answer("Это предложение больше не действует. Посмотрите актуальные курсы ниже.")
+    if WELCOME_PHOTO.exists():
+        await msg.answer_photo(FSInputFile(WELCOME_PHOTO),
+                               caption="Привет! Это бот Шумы: здесь можно записаться на курсы "
+                                       "и индивидуальные занятия, подписать договор и оплатить.")
     await show_menu(msg, db)
 
 

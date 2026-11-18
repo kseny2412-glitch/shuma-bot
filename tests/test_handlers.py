@@ -7,7 +7,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.session.base import BaseSession
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.methods import (AnswerCallbackQuery, EditMessageReplyMarkup, EditMessageText,
-                             GetMe, SendDocument, SendMessage)
+                             GetMe, SendDocument, SendMessage, SendPhoto)
 from aiogram.types import CallbackQuery, Chat, Contact, Message, Update, User
 
 from app.handlers import admin, client
@@ -25,7 +25,7 @@ class FakeSession(BaseSession):
         self.calls.append(method)
         if isinstance(method, GetMe):
             return User(id=999, is_bot=True, first_name="bot", username="shuma_test_bot")
-        if isinstance(method, (SendMessage, SendDocument, EditMessageText)):
+        if isinstance(method, (SendMessage, SendDocument, SendPhoto, EditMessageText)):
             return Message(message_id=len(self.calls), date=datetime.now(),
                            chat=Chat(id=getattr(method, "chat_id", 0) or 0, type="private"),
                            text=getattr(method, "text", None) or "doc")
@@ -150,3 +150,14 @@ async def test_foreign_contact_rejected(env):
     await say(dp, bot, USER, "05.03.1995")
     await say(dp, bot, USER, contact=Contact(phone_number="70000000000", first_name="X", user_id=7))
     assert "собственный номер" in s.texts(USER)[-1]
+
+
+async def test_start_shows_photo_and_menu(env, db):
+    dp, bot, s = env
+    db.create_offer("Интенсив", "course", 12000)
+    db.create_offer("Личное", "individual", 5000, is_public=False)
+    await say(dp, bot, USER, "/start")
+    assert any(isinstance(c, SendPhoto) for c in s.calls)
+    assert s.texts(USER)[-1].startswith("Выберите курс")
+    buttons = s.buttons()
+    assert len([b for b in buttons if b.startswith("offer:")]) == 1  # личное не показывается
