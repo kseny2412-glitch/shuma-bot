@@ -19,7 +19,11 @@ id bot >/dev/null 2>&1 || useradd -r -m -d "$DIR" -s /usr/sbin/nologin bot
 
 echo "== Скачиваю код"
 if [[ -d "$DIR/.git" ]]; then
-  sudo -u bot git -C "$DIR" pull --ff-only
+  if ! sudo -u bot git -C "$DIR" pull -q --ff-only 2>/dev/null; then
+    echo "Репозиторий закрытый. Вставьте GitHub-токен с доступом только на чтение к shuma-bot"
+    read -rsp "Токен (ввод не отображается): " GH_TOKEN; echo
+    sudo -u bot git -C "$DIR" pull -q --ff-only "https://x-access-token:${GH_TOKEN}@$REPO" main
+  fi
 else
   if git ls-remote "https://$REPO" >/dev/null 2>&1; then
     URL="https://$REPO"
