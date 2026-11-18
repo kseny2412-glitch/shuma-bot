@@ -42,7 +42,8 @@ sudo -u bot "$DIR/.venv/bin/pip" install -q -r "$DIR/requirements.txt"
 if [[ ! -f "$DIR/.env" ]]; then
   echo "== Настройка. Секреты при вводе не отображаются."
   read -rsp "Токен бота от @BotFather: " BOT_TOKEN; echo
-  read -rp  "Telegram ID админов через запятую (Шума, Ксеня): " ADMIN_IDS
+  read -rp  "Telegram ID админов через запятую [183332494,409381275 — Шума, Ксеня]: " ADMIN_IDS
+  ADMIN_IDS=${ADMIN_IDS:-183332494,409381275}
   read -rsp "API-ключ SMS.ru (пусто = тестовый режим, код в чате): " SMSRU; echo
   # Значения по умолчанию — из ЕГРИП (ИП Шумкова А. М.); Enter оставляет их.
   read -rp  "ФИО ИП [Шумкова Анастасия Михайловна]: " EX_NAME
