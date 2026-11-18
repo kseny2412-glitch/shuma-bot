@@ -31,6 +31,9 @@ cp .env.example .env    # вписать BOT_TOKEN и ADMIN_IDS
 
 ## Запуск на сервере (VPS в России, Ubuntu)
 
+Проще всего: скопировать `deploy/install.sh` на сервер и выполнить `bash install.sh` от root.
+Скрипт поставит всё нужное, спросит ключи и запустит бота как службу. Вручную это выглядит так:
+
 ```bash
 sudo useradd -r -m -d /opt/shuma-bot bot
 sudo -u bot git clone <репозиторий> /opt/shuma-bot   # или скопировать папку
