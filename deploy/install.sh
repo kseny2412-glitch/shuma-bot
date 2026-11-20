@@ -12,6 +12,14 @@ SERVICE=shuma-bot
 
 if [[ $EUID -ne 0 ]]; then echo "Запустите от root"; exit 1; fi
 
+# Токен можно передать заранее: export GH_TOKEN=... — тогда скрипт его не спрашивает.
+ask_token() {
+  if [[ -z "${GH_TOKEN:-}" ]]; then
+    echo "Репозиторий закрытый. Вставьте GitHub-токен с доступом только на чтение к shuma-bot"
+    read -rsp "Токен (ввод не отображается): " GH_TOKEN; echo
+  fi
+}
+
 echo "== Устанавливаю системные пакеты"
 apt-get update -qq
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git python3 python3-venv >/dev/null
@@ -20,17 +28,15 @@ id bot >/dev/null 2>&1 || useradd -r -m -d "$DIR" -s /usr/sbin/nologin bot
 
 echo "== Скачиваю код"
 if [[ -d "$DIR/.git" ]]; then
-  if ! sudo -u bot git -C "$DIR" pull -q --ff-only 2>/dev/null; then
-    echo "Репозиторий закрытый. Вставьте GitHub-токен с доступом только на чтение к shuma-bot"
-    read -rsp "Токен (ввод не отображается): " GH_TOKEN; echo
-    sudo -u bot git -C "$DIR" pull -q --ff-only "https://x-access-token:${GH_TOKEN}@$REPO" main
+  if ! sudo -u bot env GIT_TERMINAL_PROMPT=0 git -C "$DIR" pull -q --ff-only 2>/dev/null; then
+    ask_token
+    sudo -u bot env GIT_TERMINAL_PROMPT=0 git -C "$DIR" pull -q --ff-only "https://x-access-token:${GH_TOKEN}@$REPO" main
   fi
 else
   if git ls-remote "https://$REPO" >/dev/null 2>&1; then
     URL="https://$REPO"
   else
-    echo "Репозиторий закрытый. Вставьте GitHub-токен с доступом только на чтение к shuma-bot"
-    read -rsp "Токен (ввод не отображается): " GH_TOKEN; echo
+    ask_token
     URL="https://x-access-token:${GH_TOKEN}@$REPO"
   fi
   rm -rf "$DIR.tmp" && git clone -q "$URL" "$DIR.tmp"
