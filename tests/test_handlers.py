@@ -173,3 +173,33 @@ async def test_start_shows_photo_and_menu(env, db):
     assert s.texts(USER)[-1].startswith("Выберите курс")
     buttons = s.buttons()
     assert len([b for b in buttons if b.startswith("offer:")]) == 1  # личное не показывается
+
+
+async def test_cancel_frees_seat_and_edit_seats(env, db):
+    from app.db import Client
+    dp, bot, s = env
+    o = db.create_offer("Интенсив", "course", 1000, seats=1)
+    db.save_client(Client(USER, "Петрова Мария", "01.01.1990", "+79990000000", "m@x.ru", False))
+    oid = db.add_order(USER, o, "+79990000000", "sha", "/tmp/x.pdf", "2026-01-01", "console")
+    db.set_order_status(oid, "paid")
+    assert db.seats_left(db.get_offer(o.id)) == 0
+
+    await press(dp, bot, ADMIN, f"stud:{o.id}")
+    assert any("Петрова Мария" in t for t in s.texts(ADMIN))
+    assert f"cnl:{oid}" in s.buttons()
+    await press(dp, bot, ADMIN, f"cnl:{oid}")
+    assert db.get_order(oid).status == "paid"          # только после подтверждения
+    await press(dp, bot, ADMIN, f"cnl_yes:{oid}")
+    assert db.get_order(oid).status == "cancelled"
+    assert db.seats_left(db.get_offer(o.id)) == 1
+    await press(dp, bot, ADMIN, f"cnl_yes:{oid}")      # повторно — ничего не ломается
+    assert db.get_order(oid).status == "cancelled"
+
+    await press(dp, bot, ADMIN, f"seats:{o.id}")
+    await say(dp, bot, ADMIN, "abc")
+    assert "Нужно число" in s.texts(ADMIN)[-1]
+    await say(dp, bot, ADMIN, "5")
+    assert db.get_offer(o.id).seats == 5 and "свободно: 5" in s.texts(ADMIN)[-1]
+    await press(dp, bot, ADMIN, f"seats:{o.id}")
+    await say(dp, bot, ADMIN, "-")
+    assert db.get_offer(o.id).seats is None

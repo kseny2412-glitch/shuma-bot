@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS orders (
     tg_id       INTEGER NOT NULL REFERENCES clients(tg_id),
     offer_id    INTEGER NOT NULL REFERENCES offers(id),
     amount      INTEGER NOT NULL,
-    status      TEXT NOT NULL,      -- signed | claimed | paid | rejected
+    status      TEXT NOT NULL,      -- signed | claimed | paid | rejected | cancelled
     signed_at   TEXT NOT NULL,
     doc_sha256  TEXT NOT NULL,
     pdf_path    TEXT NOT NULL,
@@ -216,6 +216,20 @@ class Database:
         self.conn.execute("UPDATE offers SET is_active=? WHERE id=?", (int(active), offer_id))
         self.conn.commit()
 
+    def set_offer_seats(self, offer_id: int, seats: Optional[int]) -> None:
+        if seats is not None and seats < 0:
+            raise ValueError("seats must be >= 0")
+        self.conn.execute("UPDATE offers SET seats=? WHERE id=?", (seats, offer_id))
+        self.conn.commit()
+
+    def offer_students(self, offer_id: int) -> list[sqlite3.Row]:
+        """Действующие записи на предложение (занимают место)."""
+        return list(self.conn.execute(
+            f"""SELECT o.id, o.status, o.amount, c.full_name, c.phone, c.username
+               FROM orders o JOIN clients c ON c.tg_id=o.tg_id
+               WHERE o.offer_id=? AND o.status IN ({','.join('?' * len(ACTIVE_ORDER_STATUSES))})
+               ORDER BY o.id""", (offer_id, *ACTIVE_ORDER_STATUSES)))
+
     def seats_left(self, offer: Offer) -> Optional[int]:
         if offer.seats is None:
             return None
@@ -271,7 +285,8 @@ class Database:
     def set_order_status(self, order_id: int, status: str, by: Optional[int] = None) -> bool:
         """Меняет статус по правилам. Возвращает False, если переход недопустим."""
         allowed = {"claimed": ("signed",), "paid": ("signed", "claimed"),
-                   "rejected": ("signed", "claimed")}
+                   "rejected": ("signed", "claimed"),
+                   "cancelled": ACTIVE_ORDER_STATUSES}  # отмена записи админом
         order = self.get_order(order_id)
         if not order or order.status not in allowed.get(status, ()):
             return False

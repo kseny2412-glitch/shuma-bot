@@ -31,6 +31,10 @@ router.message.filter(IsAdmin())
 router.callback_query.filter(IsAdmin())
 
 
+class EditSeats(StatesGroup):
+    value = State()
+
+
 class NewOffer(StatesGroup):
     kind = State()
     title = State()
@@ -161,11 +165,15 @@ async def list_offers(cb: CallbackQuery, db: Database, bot: Bot):
         vis = "в меню" if o.is_public else "по ссылке"
         left = db.seats_left(o)
         seats = f", мест осталось: {left}" if left is not None else ""
-        btn = ("Скрыть", f"hide:{o.id}") if o.is_active else ("Показать", f"show:{o.id}")
         await cb.message.answer(
             f"<b>{o.title}</b> — {fmt_price(o.price)} ₽\n{o.kind_label}, {vis}, {status}{seats}\n"
             f"{offer_link(me.username, o.link_token)}",
-            reply_markup=kb([btn]), disable_web_page_preview=True)
+            reply_markup=offer_kb(o.id, o.is_active), disable_web_page_preview=True)
+
+
+def offer_kb(oid: int, active: bool):
+    btn = ("Скрыть", f"hide:{oid}") if active else ("Показать", f"show:{oid}")
+    return kb([btn, ("👥 Ученики", f"stud:{oid}")], [("✏️ Число мест", f"seats:{oid}")])
 
 
 @router.callback_query(F.data.startswith(("hide:", "show:")))
@@ -173,8 +181,82 @@ async def toggle(cb: CallbackQuery, db: Database):
     action, oid = cb.data.split(":")
     db.set_offer_active(int(oid), action == "show")
     await cb.answer("Скрыто" if action == "hide" else "Снова доступно")
+    await cb.message.edit_reply_markup(reply_markup=offer_kb(int(oid), action == "show"))
+
+
+# ---------- ученики и места ----------
+
+STATUS_NAMES = {"signed": "подписал(а), не оплатил(а)", "claimed": "ждёт проверки оплаты",
+                "paid": "оплачено", "rejected": "оплата не найдена",
+                "cancelled": "запись отменена"}
+
+
+def seats_line(db: Database, offer) -> str:
+    left = db.seats_left(offer)
+    return "Мест без ограничения." if left is None else f"Мест: {offer.seats}, свободно: {left}."
+
+
+@router.callback_query(F.data.startswith("stud:"))
+async def students(cb: CallbackQuery, db: Database):
+    await cb.answer()
+    offer = db.get_offer(int(cb.data.split(":")[1]))
+    rows = db.offer_students(offer.id)
+    await cb.message.answer(f"👥 <b>{escape(offer.title)}</b>\n{seats_line(db, offer)}"
+                            + ("" if rows else "\nПока никто не записан."))
+    for r in rows:
+        nick = f" @{escape(r['username'])}" if r["username"] else ""
+        await cb.message.answer(
+            f"{escape(r['full_name'])}{nick}, {escape(r['phone'])}\n"
+            f"{STATUS_NAMES.get(r['status'], r['status'])}, {fmt_price(r['amount'])} ₽",
+            reply_markup=kb([("🚫 Отменить запись", f"cnl:{r['id']}")]))
+
+
+@router.callback_query(F.data.startswith("cnl:"))
+async def cancel_ask(cb: CallbackQuery):
+    await cb.answer()
+    oid = cb.data.split(":")[1]
     await cb.message.edit_reply_markup(reply_markup=kb(
-        [("Показать", f"show:{oid}")] if action == "hide" else [("Скрыть", f"hide:{oid}")]))
+        [("Да, отменить", f"cnl_yes:{oid}"), ("Нет", f"cnl_no:{oid}")]))
+
+
+@router.callback_query(F.data.startswith("cnl_no:"))
+async def cancel_no(cb: CallbackQuery):
+    await cb.answer("Оставили")
+    await cb.message.edit_reply_markup(reply_markup=kb(
+        [("🚫 Отменить запись", f"cnl:{cb.data.split(':')[1]}")]))
+
+
+@router.callback_query(F.data.startswith("cnl_yes:"))
+async def cancel_yes(cb: CallbackQuery, db: Database):
+    order = db.get_order(int(cb.data.split(":")[1]))
+    if not order or not db.set_order_status(order.id, "cancelled", by=cb.from_user.id):
+        await cb.answer("Эта запись уже отменена", show_alert=True)
+        return await cb.message.edit_reply_markup(reply_markup=None)
+    await cb.answer("Запись отменена")
+    offer = db.get_offer(order.offer_id)
+    await cb.message.edit_text(cb.message.html_text + "\n\n🚫 Запись отменена, место освободилось. "
+                               + seats_line(db, offer))
+
+
+@router.callback_query(F.data.startswith("seats:"))
+async def seats_ask(cb: CallbackQuery, db: Database, state: FSMContext):
+    await cb.answer()
+    offer = db.get_offer(int(cb.data.split(":")[1]))
+    await state.set_state(EditSeats.value)
+    await state.update_data(offer_id=offer.id)
+    await cb.message.answer(f"«{escape(offer.title)}». {seats_line(db, offer)}\n"
+                            f"Сколько всего мест будет? Напишите число или «{SKIP}» — без ограничения.")
+
+
+@router.message(EditSeats.value, F.text)
+async def seats_set(msg: Message, db: Database, state: FSMContext):
+    t = msg.text.strip()
+    if t != SKIP and not t.isdigit():
+        return await msg.answer(f"Нужно число или «{SKIP}».")
+    oid = (await state.get_data())["offer_id"]
+    db.set_offer_seats(oid, None if t == SKIP else int(t))
+    await state.clear()
+    await msg.answer(f"Готово. {seats_line(db, db.get_offer(oid))}")
 
 
 # ---------- оплаты ----------
@@ -246,8 +328,7 @@ async def export_csv(cb: CallbackQuery, db: Database):
     buf = io.StringIO()
     w = csv.writer(buf, delimiter=";")
     w.writerow(["№", "Подписано (UTC)", "Статус", "Сумма", "Курс", "Клиент", "Телефон", "E-mail"])
-    names = {"signed": "подписано, не оплачено", "claimed": "ждёт проверки оплаты",
-             "paid": "оплачено", "rejected": "оплата не найдена"}
+    names = STATUS_NAMES
     for r in db.orders_report():
         w.writerow([r["id"], r["signed_at"], names.get(r["status"], r["status"]), r["amount"],
                     r["title"], r["full_name"], r["phone"], r["email"]])
