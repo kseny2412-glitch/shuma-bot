@@ -35,6 +35,7 @@ class Config:
     sms_provider: str
     smsru_api_key: str
     data_dir: Path
+    smsru_from: str = ""
     timezone: str = "Europe/Moscow"
     executor: Executor = field(default_factory=Executor)
 
@@ -61,6 +62,7 @@ def load_config() -> Config:
         payment_url=os.environ.get("PAYMENT_URL", "https://shumkadance.tb.ru/"),
         sms_provider=os.environ.get("SMS_PROVIDER", "console"),
         smsru_api_key=os.environ.get("SMSRU_API_KEY", ""),
+        smsru_from=os.environ.get("SMSRU_FROM", "").strip(),
         data_dir=data_dir,
         timezone=os.environ.get("TIMEZONE", "Europe/Moscow"),
         executor=Executor(

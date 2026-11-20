@@ -38,7 +38,7 @@ cp .env.example .env    # вписать BOT_TOKEN и ADMIN_IDS
 sudo useradd -r -m -d /opt/shuma-bot bot
 sudo -u bot git clone <репозиторий> /opt/shuma-bot   # или скопировать папку
 cd /opt/shuma-bot && sudo -u bot python3 -m venv .venv && sudo -u bot .venv/bin/pip install -r requirements.txt
-sudo -u bot cp .env.example .env && sudo -u bot nano .env   # SMS_PROVIDER=smsru, SMSRU_API_KEY=...
+sudo -u bot cp .env.example .env && sudo -u bot nano .env   # SMS_PROVIDER=smsru, SMSRU_API_KEY=..., SMSRU_FROM=...
 sudo cp deploy/shuma-bot.service /etc/systemd/system/ && sudo systemctl enable --now shuma-bot
 ```
 

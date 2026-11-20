@@ -25,7 +25,7 @@ async def main() -> None:
     bot = Bot(cfg.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher(storage=MemoryStorage(),
                     db=Database(cfg.db_path), cfg=cfg,
-                    sms=make_sender(cfg.sms_provider, cfg.smsru_api_key))
+                    sms=make_sender(cfg.sms_provider, cfg.smsru_api_key, cfg.smsru_from))
     dp.include_router(admin.router)   # админ-роутер первым: его фильтр пропускает не-админов дальше
     dp.include_router(client.router)
     await dp.start_polling(bot)

@@ -33,16 +33,23 @@ class SmsRuSender(SmsSender):
     name = "smsru"
     URL = "https://sms.ru/sms/send"
 
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, sender: str = ""):
         if not api_key:
             raise ValueError("SMSRU_API_KEY не задан")
         self.api_key = api_key
+        self.sender = sender  # одобренное в SMS.ru буквенное имя отправителя
 
     async def send(self, phone: str, text: str) -> None:
         params = {"api_id": self.api_key, "to": phone.lstrip("+"), "msg": text, "json": 1}
-        async with aiohttp.ClientSession() as s:
-            async with s.post(self.URL, data=params, timeout=aiohttp.ClientTimeout(total=15)) as r:
-                data = await r.json(content_type=None)
+        if self.sender:
+            params["from"] = self.sender
+        try:
+            async with aiohttp.ClientSession() as s:
+                async with s.post(self.URL, data=params,
+                                  timeout=aiohttp.ClientTimeout(total=15)) as r:
+                    data = await r.json(content_type=None)
+        except (aiohttp.ClientError, TimeoutError, ValueError) as e:
+            raise SmsError(f"SMS.ru недоступен: {e!r}") from e
         if data.get("status") != "OK":
             raise SmsError(f"SMS.ru: {data}")
         sms = next(iter(data.get("sms", {}).values()), {})
@@ -50,7 +57,7 @@ class SmsRuSender(SmsSender):
             raise SmsError(f"SMS.ru: {sms}")
 
 
-def make_sender(provider: str, api_key: str = "") -> SmsSender:
+def make_sender(provider: str, api_key: str = "", sender: str = "") -> SmsSender:
     if provider == "smsru":
-        return SmsRuSender(api_key)
+        return SmsRuSender(api_key, sender)
     return ConsoleSender()

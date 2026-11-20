@@ -50,6 +50,7 @@ if [[ ! -f "$DIR/.env" ]]; then
   read -rp  "Telegram ID админов через запятую [183332494,409381275 — Шума, Ксеня]: " ADMIN_IDS
   ADMIN_IDS=${ADMIN_IDS:-183332494,409381275}
   read -rsp "API-ключ SMS.ru (пусто = тестовый режим, код в чате): " SMSRU; echo
+  SMSRU_FROM=""; [[ -n "$SMSRU" ]] && read -rp "Имя отправителя SMS.ru (как одобрено в «Отправителях»): " SMSRU_FROM
   # Значения по умолчанию — из ЕГРИП (ИП Шумкова А. М.); Enter оставляет их.
   read -rp  "ФИО ИП [Шумкова Анастасия Михайловна]: " EX_NAME
   read -rp  "ИНН ИП [390507309923]: " EX_INN
@@ -66,6 +67,7 @@ ADMIN_IDS=$ADMIN_IDS
 PAYMENT_URL=https://shumkadance.tb.ru/
 SMS_PROVIDER=$PROVIDER
 SMSRU_API_KEY=$SMSRU
+SMSRU_FROM=$SMSRU_FROM
 DATA_DIR=./data
 EXECUTOR_NAME=$EX_NAME
 EXECUTOR_INN=$EX_INN
