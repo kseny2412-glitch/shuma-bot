@@ -55,7 +55,7 @@ def offer_card(db: Database, o: Offer) -> str:
         lines.append(f"Где: {o.address}")
     left = db.seats_left(o)
     if left is not None:
-        lines.append(f"Свободных мест: {left}")
+        lines.append(f"Мест в группе: {o.seats}, свободно: {left}")
     if o.description:
         lines.append("")
         lines.append(o.description)

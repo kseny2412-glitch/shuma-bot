@@ -203,3 +203,37 @@ async def test_cancel_frees_seat_and_edit_seats(env, db):
     await press(dp, bot, ADMIN, f"seats:{o.id}")
     await say(dp, bot, ADMIN, "-")
     assert db.get_offer(o.id).seats is None
+
+
+async def test_offline_taken_reduces_free_seats(env, db, tmp_path):
+    from app.handlers.client import offer_card
+    dp, bot, s = env
+    o = db.create_offer("Heels", "course", 8000, seats=20)
+    await press(dp, bot, ADMIN, f"offl:{o.id}")
+    await say(dp, bot, ADMIN, "пять")
+    assert "Нужно число" in s.texts(ADMIN)[-1]
+    await say(dp, bot, ADMIN, "5")
+    o = db.get_offer(o.id)
+    assert o.seats == 20 and db.seats_left(o) == 15
+    assert "Мест: 20, свободно: 15 (вне бота записано: 5)" in s.texts(ADMIN)[-1]
+    assert "Мест в группе: 20, свободно: 15" in offer_card(db, o)
+    db.set_offline_taken(o.id, 25)
+    assert db.seats_left(db.get_offer(o.id)) == 0
+
+
+def test_offline_migration(tmp_path):
+    import sqlite3
+    from app.db import Database
+    p = tmp_path / "old.db"
+    c = sqlite3.connect(p)
+    c.execute("""CREATE TABLE offers (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL,
+        kind TEXT NOT NULL, price INTEGER NOT NULL, schedule TEXT NOT NULL DEFAULT '',
+        address TEXT NOT NULL DEFAULT '', seats INTEGER, description TEXT NOT NULL DEFAULT '',
+        is_public INTEGER NOT NULL DEFAULT 1, is_active INTEGER NOT NULL DEFAULT 1,
+        link_token TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL)""")
+    c.execute("INSERT INTO offers (title, kind, price, seats, link_token, created_at) "
+              "VALUES ('A','course',100,10,'t','x')")
+    c.commit(); c.close()
+    db = Database(p)
+    o = db.get_offer(1)
+    assert o.offline_taken == 0 and db.seats_left(o) == 10

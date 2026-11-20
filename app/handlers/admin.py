@@ -33,6 +33,7 @@ router.callback_query.filter(IsAdmin())
 
 class EditSeats(StatesGroup):
     value = State()
+    offline = State()
 
 
 class NewOffer(StatesGroup):
@@ -163,8 +164,7 @@ async def list_offers(cb: CallbackQuery, db: Database, bot: Bot):
     for o in offers[:30]:
         status = "активно" if o.is_active else "скрыто"
         vis = "в меню" if o.is_public else "по ссылке"
-        left = db.seats_left(o)
-        seats = f", мест осталось: {left}" if left is not None else ""
+        seats = ("\n" + seats_line(db, o)) if o.seats is not None else ""
         await cb.message.answer(
             f"<b>{o.title}</b> — {fmt_price(o.price)} ₽\n{o.kind_label}, {vis}, {status}{seats}\n"
             f"{offer_link(me.username, o.link_token)}",
@@ -173,7 +173,8 @@ async def list_offers(cb: CallbackQuery, db: Database, bot: Bot):
 
 def offer_kb(oid: int, active: bool):
     btn = ("Скрыть", f"hide:{oid}") if active else ("Показать", f"show:{oid}")
-    return kb([btn, ("👥 Ученики", f"stud:{oid}")], [("✏️ Число мест", f"seats:{oid}")])
+    return kb([btn, ("👥 Ученики", f"stud:{oid}")],
+              [("✏️ Число мест", f"seats:{oid}"), ("🧾 Записаны вне бота", f"offl:{oid}")])
 
 
 @router.callback_query(F.data.startswith(("hide:", "show:")))
@@ -193,7 +194,10 @@ STATUS_NAMES = {"signed": "подписал(а), не оплатил(а)", "clai
 
 def seats_line(db: Database, offer) -> str:
     left = db.seats_left(offer)
-    return "Мест без ограничения." if left is None else f"Мест: {offer.seats}, свободно: {left}."
+    if left is None:
+        return "Мест без ограничения."
+    extra = f" (вне бота записано: {offer.offline_taken})" if offer.offline_taken else ""
+    return f"Мест: {offer.seats}, свободно: {left}{extra}."
 
 
 @router.callback_query(F.data.startswith("stud:"))
@@ -246,6 +250,29 @@ async def seats_ask(cb: CallbackQuery, db: Database, state: FSMContext):
     await state.update_data(offer_id=offer.id)
     await cb.message.answer(f"«{escape(offer.title)}». {seats_line(db, offer)}\n"
                             f"Сколько всего мест будет? Напишите число или «{SKIP}» — без ограничения.")
+
+
+@router.callback_query(F.data.startswith("offl:"))
+async def offline_ask(cb: CallbackQuery, db: Database, state: FSMContext):
+    await cb.answer()
+    offer = db.get_offer(int(cb.data.split(":")[1]))
+    await state.set_state(EditSeats.offline)
+    await state.update_data(offer_id=offer.id)
+    await cb.message.answer(
+        f"«{escape(offer.title)}». {seats_line(db, offer)}\n"
+        f"Сколько человек записано на этот курс вне бота (лично, в переписке)? "
+        f"Напишите число, 0 — никого. Общее число мест не меняется.")
+
+
+@router.message(EditSeats.offline, F.text)
+async def offline_set(msg: Message, db: Database, state: FSMContext):
+    t = msg.text.strip()
+    if not t.isdigit():
+        return await msg.answer("Нужно число, например 5 или 0.")
+    oid = (await state.get_data())["offer_id"]
+    db.set_offline_taken(oid, int(t))
+    await state.clear()
+    await msg.answer(f"Готово. {seats_line(db, db.get_offer(oid))}")
 
 
 @router.message(EditSeats.value, F.text)

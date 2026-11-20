@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS offers (
     description TEXT NOT NULL DEFAULT '',
     is_public   INTEGER NOT NULL DEFAULT 1,  -- 0 = только по личной ссылке
     is_active   INTEGER NOT NULL DEFAULT 1,
+    offline_taken INTEGER NOT NULL DEFAULT 0,  -- записаны вне бота (занимают места)
     link_token  TEXT NOT NULL UNIQUE,
     created_at  TEXT NOT NULL
 );
@@ -112,6 +113,7 @@ class Offer:
     is_public: bool
     is_active: bool
     link_token: str
+    offline_taken: int = 0
 
     @property
     def kind_label(self) -> str:
@@ -140,6 +142,10 @@ class Database:
         cols = {r[1] for r in self.conn.execute("PRAGMA table_info(clients)")}
         if "username" not in cols:  # миграция для баз, созданных до 2026-11-20
             self.conn.execute("ALTER TABLE clients ADD COLUMN username TEXT")
+        cols = {r[1] for r in self.conn.execute("PRAGMA table_info(offers)")}
+        if "offline_taken" not in cols:
+            self.conn.execute(
+                "ALTER TABLE offers ADD COLUMN offline_taken INTEGER NOT NULL DEFAULT 0")
         self.conn.commit()
 
     # --- клиенты ---
@@ -195,7 +201,7 @@ class Database:
     def _offer(r: sqlite3.Row) -> Offer:
         return Offer(r["id"], r["title"], r["kind"], r["price"], r["schedule"],
                      r["address"], r["seats"], r["description"], bool(r["is_public"]),
-                     bool(r["is_active"]), r["link_token"])
+                     bool(r["is_active"]), r["link_token"], r["offline_taken"])
 
     def get_offer(self, offer_id: int) -> Optional[Offer]:
         r = self.conn.execute("SELECT * FROM offers WHERE id=?", (offer_id,)).fetchone()
@@ -222,6 +228,12 @@ class Database:
         self.conn.execute("UPDATE offers SET seats=? WHERE id=?", (seats, offer_id))
         self.conn.commit()
 
+    def set_offline_taken(self, offer_id: int, n: int) -> None:
+        if n < 0:
+            raise ValueError("n must be >= 0")
+        self.conn.execute("UPDATE offers SET offline_taken=? WHERE id=?", (n, offer_id))
+        self.conn.commit()
+
     def offer_students(self, offer_id: int) -> list[sqlite3.Row]:
         """Действующие записи на предложение (занимают место)."""
         return list(self.conn.execute(
@@ -238,7 +250,7 @@ class Database:
             f"({','.join('?' * len(ACTIVE_ORDER_STATUSES))})",
             (offer.id, *ACTIVE_ORDER_STATUSES),
         ).fetchone()[0]
-        return max(offer.seats - taken, 0)
+        return max(offer.seats - taken - offer.offline_taken, 0)
 
     # --- договоры ---
     def get_contract(self, tg_id: int) -> Optional[sqlite3.Row]:
