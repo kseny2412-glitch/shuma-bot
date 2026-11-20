@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS offers (
     is_public   INTEGER NOT NULL DEFAULT 1,  -- 0 = только по личной ссылке
     is_active   INTEGER NOT NULL DEFAULT 1,
     offline_taken INTEGER NOT NULL DEFAULT 0,  -- записаны вне бота (занимают места)
+    is_archived INTEGER NOT NULL DEFAULT 0,    -- «удалён» админом, но есть договоры
     link_token  TEXT NOT NULL UNIQUE,
     created_at  TEXT NOT NULL
 );
@@ -114,6 +115,7 @@ class Offer:
     is_active: bool
     link_token: str
     offline_taken: int = 0
+    is_archived: bool = False
 
     @property
     def kind_label(self) -> str:
@@ -146,6 +148,9 @@ class Database:
         if "offline_taken" not in cols:
             self.conn.execute(
                 "ALTER TABLE offers ADD COLUMN offline_taken INTEGER NOT NULL DEFAULT 0")
+        if "is_archived" not in cols:
+            self.conn.execute(
+                "ALTER TABLE offers ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0")
         self.conn.commit()
 
     # --- клиенты ---
@@ -201,7 +206,8 @@ class Database:
     def _offer(r: sqlite3.Row) -> Offer:
         return Offer(r["id"], r["title"], r["kind"], r["price"], r["schedule"],
                      r["address"], r["seats"], r["description"], bool(r["is_public"]),
-                     bool(r["is_active"]), r["link_token"], r["offline_taken"])
+                     bool(r["is_active"]), r["link_token"], r["offline_taken"],
+                     bool(r["is_archived"]))
 
     def get_offer(self, offer_id: int) -> Optional[Offer]:
         r = self.conn.execute("SELECT * FROM offers WHERE id=?", (offer_id,)).fetchone()
@@ -212,11 +218,27 @@ class Database:
         return self._offer(r) if r else None
 
     def list_offers(self, public_only: bool = False) -> list[Offer]:
-        q = "SELECT * FROM offers"
+        q = "SELECT * FROM offers WHERE is_archived=0"
         if public_only:
-            q += " WHERE is_public=1 AND is_active=1"
+            q += " AND is_public=1 AND is_active=1"
         q += " ORDER BY id DESC"
         return [self._offer(r) for r in self.conn.execute(q)]
+
+    def remove_offer(self, offer_id: int) -> str:
+        """Удаляет предложение. Если по нему есть заявки (подписанные документы,
+        оплаты), не стирает, а убирает в архив: из списков пропадает, данные остаются.
+        Возвращает "deleted" или "archived"."""
+        n = self.conn.execute("SELECT COUNT(*) FROM orders WHERE offer_id=?",
+                              (offer_id,)).fetchone()[0]
+        if n:
+            self.conn.execute("UPDATE offers SET is_archived=1, is_active=0 WHERE id=?",
+                              (offer_id,))
+            result = "archived"
+        else:
+            self.conn.execute("DELETE FROM offers WHERE id=?", (offer_id,))
+            result = "deleted"
+        self.conn.commit()
+        return result
 
     def set_offer_active(self, offer_id: int, active: bool) -> None:
         self.conn.execute("UPDATE offers SET is_active=? WHERE id=?", (int(active), offer_id))

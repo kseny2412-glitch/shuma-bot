@@ -237,3 +237,25 @@ def test_offline_migration(tmp_path):
     db = Database(p)
     o = db.get_offer(1)
     assert o.offline_taken == 0 and db.seats_left(o) == 10
+
+
+async def test_delete_offer_empty_and_with_orders(env, db):
+    from app.db import Client
+    dp, bot, s = env
+    empty = db.create_offer("Пустой", "course", 100)
+    used = db.create_offer("Прошедший", "course", 200)
+    db.save_client(Client(USER, "Петрова Мария", "01.01.1990", "+79990000000", "m@x.ru", False))
+    oid = db.add_order(USER, used, "+79990000000", "sha", "/tmp/x.pdf", "2026-01-01", "console")
+
+    await press(dp, bot, ADMIN, f"del:{empty.id}")
+    assert db.get_offer(empty.id) is not None            # без подтверждения не удаляем
+    await press(dp, bot, ADMIN, f"del_yes:{empty.id}")
+    assert db.get_offer(empty.id) is None                # заявок не было — удалён совсем
+
+    await press(dp, bot, ADMIN, f"del_yes:{used.id}")
+    o = db.get_offer(used.id)
+    assert o.is_archived and not o.is_active            # есть заявка — в архив
+    assert db.get_order(oid) is not None
+    assert used.id not in [x.id for x in db.list_offers()]
+    assert any(r["title"] == "Прошедший" for r in db.orders_report())   # CSV сохраняет
+    await press(dp, bot, ADMIN, f"del_yes:{used.id}")    # повторно — без ошибок

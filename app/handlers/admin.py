@@ -174,7 +174,39 @@ async def list_offers(cb: CallbackQuery, db: Database, bot: Bot):
 def offer_kb(oid: int, active: bool):
     btn = ("Скрыть", f"hide:{oid}") if active else ("Показать", f"show:{oid}")
     return kb([btn, ("👥 Ученики", f"stud:{oid}")],
-              [("✏️ Число мест", f"seats:{oid}"), ("🧾 Записаны вне бота", f"offl:{oid}")])
+              [("✏️ Число мест", f"seats:{oid}"), ("🧾 Записаны вне бота", f"offl:{oid}")],
+              [("🗑 Удалить", f"del:{oid}")])
+
+
+@router.callback_query(F.data.startswith("del:"))
+async def delete_ask(cb: CallbackQuery, db: Database):
+    await cb.answer()
+    oid = int(cb.data.split(":")[1])
+    offer = db.get_offer(oid)
+    if not offer:
+        return await cb.message.edit_reply_markup(reply_markup=None)
+    await cb.message.answer(
+        f"Удалить «{escape(offer.title)}»? Курс пропадёт из меню и из списка предложений. "
+        f"Подписанные договоры и оплаты по нему сохранятся.",
+        reply_markup=kb([("Да, удалить", f"del_yes:{oid}"), ("Нет", "del_no")]))
+
+
+@router.callback_query(F.data == "del_no")
+async def delete_no(cb: CallbackQuery):
+    await cb.answer("Оставили")
+    await cb.message.edit_text(cb.message.html_text + "\n\nНе удаляем.")
+
+
+@router.callback_query(F.data.startswith("del_yes:"))
+async def delete_yes(cb: CallbackQuery, db: Database):
+    oid = int(cb.data.split(":")[1])
+    offer = db.get_offer(oid)
+    if not offer or offer.is_archived:
+        await cb.answer("Уже удалено", show_alert=True)
+        return await cb.message.edit_reply_markup(reply_markup=None)
+    db.remove_offer(oid)
+    await cb.answer("Удалено")
+    await cb.message.edit_text(f"🗑 «{escape(offer.title)}» удалён.")
 
 
 @router.callback_query(F.data.startswith(("hide:", "show:")))
