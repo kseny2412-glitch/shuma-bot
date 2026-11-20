@@ -15,7 +15,7 @@ from aiogram.types import (CallbackQuery, FSInputFile, InlineKeyboardButton,
 
 from ..config import ROOT, Config
 from ..db import Client, Database, Offer
-from ..services import Draft, fmt_price, make_draft, preview_pdfs, sign_draft
+from ..services import NumberTaken, Draft, fmt_price, make_draft, preview_pdfs, sign_draft
 from ..signing import check_code, issue_code
 from ..sms import SmsError, SmsSender
 
@@ -273,7 +273,19 @@ async def enter_code(msg: Message, state: FSMContext, db: Database, cfg: Config,
     d = await state.get_data()
     offer = db.get_offer(d["offer_id"])
     draft = Draft(**d["draft"])
-    signed = sign_draft(db, cfg, client, offer, draft, sms.name)
+    try:
+        signed = sign_draft(db, cfg, client, offer, draft, sms.name)
+    except NumberTaken:
+        # редкий случай: два клиента подписывали одновременно — даём новый номер
+        draft = make_draft(db, cfg, client, offer)
+        await state.update_data(draft=asdict(draft))
+        await state.set_state(Buy.review)
+        for f in preview_pdfs(cfg, draft, client.tg_id):
+            await msg.answer_document(FSInputFile(f))
+        return await msg.answer(
+            f"Пока вы читали, номер договора обновился, теперь № {draft.contract_no}. "
+            f"Проверьте документы и подпишите ещё раз.",
+            reply_markup=kb([("✍️ Подписать", "sign")], [("Отмена", "cancel")]))
     await state.clear()
     await msg.answer("✅ Подписано! Ваши экземпляры документов:")
     for f in signed.files:

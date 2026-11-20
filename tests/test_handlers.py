@@ -276,3 +276,13 @@ async def test_reorder_offers_and_menu_without_price(env, db):
     menu = [c for c in s.calls if getattr(c, "text", None) == "Выберите курс или занятие:"][-1]
     labels = [row[0].text for row in menu.reply_markup.inline_keyboard]
     assert labels == ["Второй", "Первый", "Третий"]
+
+
+async def test_admin_sets_contract_start(env, db):
+    dp, bot, s = env
+    await press(dp, bot, ADMIN, "adm:num")
+    assert "№ 1" in s.texts(ADMIN)[-1]
+    await say(dp, bot, ADMIN, "abc")
+    assert "Нужно число" in s.texts(ADMIN)[-1]
+    await say(dp, bot, ADMIN, "25")
+    assert "№ 25" in s.texts(ADMIN)[-1] and db.next_contract_number() == 25

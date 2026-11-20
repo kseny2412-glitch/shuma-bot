@@ -33,9 +33,9 @@ def make_draft(db: Database, cfg: Config, client: Client, offer: Offer) -> Draft
     now = local_now(cfg)
     existing = db.get_contract(client.tg_id)
     if existing:
-        contract_no = Path(existing["pdf_path"]).stem.removeprefix("contract_")
+        contract_no = existing["number"] or Path(existing["pdf_path"]).stem.removeprefix("contract_")
     else:
-        contract_no = f"{now:%Y%m%d}-{client.tg_id}"
+        contract_no = str(db.next_contract_number())
     n_orders = db.conn.execute("SELECT COUNT(*) FROM orders WHERE tg_id=?",
                                (client.tg_id,)).fetchone()[0]
     order_no = f"{contract_no}/{n_orders + 1}"
@@ -71,6 +71,10 @@ def preview_pdfs(cfg: Config, draft: Draft, tg_id: int) -> list[Path]:
     return files
 
 
+class NumberTaken(Exception):
+    """Пока клиент читал договор, этот номер получил другой клиент."""
+
+
 @dataclass
 class Signed:
     order_id: int
@@ -86,11 +90,14 @@ def sign_draft(db: Database, cfg: Config, client: Client, offer: Offer, draft: D
     docs = cfg.docs_dir / str(client.tg_id)
     files: list[Path] = []
     if draft.contract_text and not db.get_contract(client.tg_id):
+        if db.contract_number_taken(draft.contract_no):
+            raise NumberTaken(draft.contract_no)
         sha = text_sha256(draft.contract_text)
         path = docs / f"contract_{draft.contract_no}.pdf"
         write_pdf(draft.contract_text, path, SignatureStamp(
             client.full_name, client.phone, human_time, sha, secrets.token_hex(8), executor))
-        db.add_contract(client.tg_id, client.phone, sha, str(path), signed_at, provider)
+        db.add_contract(client.tg_id, client.phone, sha, str(path), signed_at, provider,
+                        number=draft.contract_no)
         files.append(path)
     sha = text_sha256(draft.application_text)
     path = docs / f"application_{draft.order_no.replace('/', '_')}.pdf"

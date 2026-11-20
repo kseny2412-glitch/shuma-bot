@@ -51,7 +51,36 @@ SKIP = "-"
 MENU = kb([("➕ Новый курс / занятие", "adm:new")],
           [("📋 Все предложения", "adm:list")],
           [("💳 Ждут подтверждения оплаты", "adm:pending")],
-          [("📥 Выгрузка заказов (CSV)", "adm:csv")])
+          [("📥 Выгрузка заказов (CSV)", "adm:csv")],
+          [("№ Нумерация договоров", "adm:num")])
+
+
+class ContractNum(StatesGroup):
+    start = State()
+
+
+@router.callback_query(F.data == "adm:num")
+async def num_ask(cb: CallbackQuery, db: Database, state: FSMContext):
+    await cb.answer()
+    await state.set_state(ContractNum.start)
+    await cb.message.answer(
+        f"Следующий договор получит № {db.next_contract_number()}.\n"
+        f"Чтобы продолжить бумажную нумерацию, напишите номер, с которого начать "
+        f"(например, 25). «{SKIP}» — оставить как есть.")
+
+
+@router.message(ContractNum.start, F.text)
+async def num_set(msg: Message, db: Database, state: FSMContext):
+    t = msg.text.strip()
+    if t != SKIP:
+        if not t.isdigit() or int(t) < 1:
+            return await msg.answer(f"Нужно число, например 25, или «{SKIP}».")
+        db.set_setting("contract_start", t)
+    await state.clear()
+    n = db.next_contract_number()
+    note = "" if t == SKIP or n == int(t) else \
+        f" (номер {t} уже занят — меньше уже выданных номеров нельзя)"
+    await msg.answer(f"Готово. Следующий договор получит № {n}{note}.")
 
 
 @router.message(Command("admin"))
@@ -398,10 +427,11 @@ async def export_csv(cb: CallbackQuery, db: Database):
     await cb.answer()
     buf = io.StringIO()
     w = csv.writer(buf, delimiter=";")
-    w.writerow(["№", "Подписано (UTC)", "Статус", "Сумма", "Курс", "Клиент", "Телефон", "E-mail"])
+    w.writerow(["№ заявки", "Договор №", "Подписано (UTC)", "Статус", "Сумма", "Курс",
+                "Клиент", "Телефон", "E-mail"])
     names = STATUS_NAMES
     for r in db.orders_report():
-        w.writerow([r["id"], r["signed_at"], names.get(r["status"], r["status"]), r["amount"],
+        w.writerow([r["id"], r["contract_no"] or "", r["signed_at"], names.get(r["status"], r["status"]), r["amount"],
                     r["title"], r["full_name"], r["phone"], r["email"]])
     data = buf.getvalue().encode("utf-8-sig")
     await cb.message.answer_document(BufferedInputFile(data, filename="zakazy.csv"))

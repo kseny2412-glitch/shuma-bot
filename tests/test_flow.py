@@ -39,3 +39,32 @@ def test_missing_executor_fields_become_blanks(db, cfg, client):
     offer = db.create_offer("Курс", "course", 1000)
     d = make_draft(db, cfg2, client, offer)
     assert "________" in d.contract_text
+
+
+def test_contract_numbers_are_sequential_and_start_configurable(db, cfg, client):
+    import pytest
+    from dataclasses import replace
+    from app.services import NumberTaken
+    offer = db.create_offer("Курс", "course", 1000)
+    d1 = make_draft(db, cfg, client, offer)
+    assert d1.contract_no == "1" and "ДОГОВОР № 1" in d1.contract_text
+    assert d1.order_no == "1/1"
+    sign_draft(db, cfg, client, offer, d1, "console")
+    assert db.get_contract(client.tg_id)["number"] == "1"
+    assert make_draft(db, cfg, client, offer).order_no == "1/2"   # повторная покупка
+
+    db.set_setting("contract_start", "25")                        # продолжить бумажные
+    c2 = replace(client, tg_id=client.tg_id + 1)
+    db.save_client(c2)
+    c3 = replace(client, tg_id=client.tg_id + 2)
+    db.save_client(c3)
+    d2, d3 = make_draft(db, cfg, c2, offer), make_draft(db, cfg, c3, offer)
+    assert d2.contract_no == d3.contract_no == "25"
+    sign_draft(db, cfg, c2, offer, d2, "console")
+    with pytest.raises(NumberTaken):                              # одновременная подпись
+        sign_draft(db, cfg, c3, offer, d3, "console")
+    assert make_draft(db, cfg, c3, offer).contract_no == "26"
+    db.set_setting("contract_start", "3")                         # меньше выданных — игнор
+    assert db.next_contract_number() == 26
+    row = [r for r in db.orders_report() if r["full_name"] == client.full_name][0]
+    assert row["contract_no"] in ("1", "25")

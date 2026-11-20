@@ -48,7 +48,13 @@ CREATE TABLE IF NOT EXISTS contracts (
     signed_at  TEXT NOT NULL,
     phone      TEXT NOT NULL,
     doc_sha256 TEXT NOT NULL,
-    pdf_path   TEXT NOT NULL
+    pdf_path   TEXT NOT NULL,
+    number     TEXT              -- номер договора (сквозной: 1, 2, 3…)
+);
+
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS orders (
@@ -145,6 +151,8 @@ class Database:
         cols = {r[1] for r in self.conn.execute("PRAGMA table_info(clients)")}
         if "username" not in cols:  # миграция для баз, созданных до 2026-11-20
             self.conn.execute("ALTER TABLE clients ADD COLUMN username TEXT")
+        if "number" not in {r[1] for r in self.conn.execute("PRAGMA table_info(contracts)")}:
+            self.conn.execute("ALTER TABLE contracts ADD COLUMN number TEXT")
         cols = {r[1] for r in self.conn.execute("PRAGMA table_info(offers)")}
         if "offline_taken" not in cols:
             self.conn.execute(
@@ -301,10 +309,11 @@ class Database:
         ).fetchone()
 
     def add_contract(self, tg_id: int, phone: str, sha: str, pdf_path: str,
-                     signed_at: str, sms_provider: str) -> int:
+                     signed_at: str, sms_provider: str, number: Optional[str] = None) -> int:
         cur = self.conn.execute(
-            "INSERT INTO contracts (tg_id, signed_at, phone, doc_sha256, pdf_path) VALUES (?,?,?,?,?)",
-            (tg_id, signed_at, phone, sha, pdf_path),
+            "INSERT INTO contracts (tg_id, signed_at, phone, doc_sha256, pdf_path, number) "
+            "VALUES (?,?,?,?,?,?)",
+            (tg_id, signed_at, phone, sha, pdf_path, number),
         )
         self._log(tg_id, phone, "contract", cur.lastrowid, sha, signed_at, sms_provider)
         self.conn.commit()
@@ -313,6 +322,27 @@ class Database:
     def next_contract_id(self) -> int:
         r = self.conn.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM contracts").fetchone()
         return r[0]
+
+    # --- сквозная нумерация договоров ---
+    def get_setting(self, key: str, default: str = "") -> str:
+        r = self.conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+        return r["value"] if r else default
+
+    def set_setting(self, key: str, value: str) -> None:
+        self.conn.execute("INSERT INTO settings (key, value) VALUES (?, ?) "
+                          "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
+        self.conn.commit()
+
+    def next_contract_number(self) -> int:
+        """Следующий свободный номер: больше всех выданных и не меньше заданного админом."""
+        used = self.conn.execute(
+            "SELECT COALESCE(MAX(CAST(number AS INTEGER)), 0) FROM contracts "
+            "WHERE number GLOB '[0-9]*'").fetchone()[0]
+        return max(used + 1, int(self.get_setting("contract_start", "1")))
+
+    def contract_number_taken(self, number: str) -> bool:
+        return self.conn.execute("SELECT 1 FROM contracts WHERE number=?",
+                                 (number,)).fetchone() is not None
 
     # --- заказы (заявки) ---
     def add_order(self, tg_id: int, offer: Offer, phone: str, sha: str, pdf_path: str,
@@ -354,7 +384,9 @@ class Database:
 
     def orders_report(self) -> list[sqlite3.Row]:
         return list(self.conn.execute(
-            """SELECT o.id, o.signed_at, o.status, o.amount, f.title, c.full_name, c.phone, c.email
+            """SELECT o.id, o.signed_at, o.status, o.amount, f.title, c.full_name, c.phone, c.email,
+                      (SELECT k.number FROM contracts k WHERE k.tg_id=o.tg_id
+                       ORDER BY k.id DESC LIMIT 1) AS contract_no
                FROM orders o JOIN offers f ON f.id=o.offer_id JOIN clients c ON c.tg_id=o.tg_id
                ORDER BY o.id DESC"""))
 
