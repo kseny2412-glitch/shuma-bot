@@ -137,6 +137,9 @@ class Database:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.executescript(SCHEMA)
+        cols = {r[1] for r in self.conn.execute("PRAGMA table_info(clients)")}
+        if "username" not in cols:  # миграция для баз, созданных до 2026-11-20
+            self.conn.execute("ALTER TABLE clients ADD COLUMN username TEXT")
         self.conn.commit()
 
     # --- клиенты ---
@@ -153,6 +156,15 @@ class Database:
              int(c.photo_consent), ts),
         )
         self.conn.commit()
+
+    def set_username(self, tg_id: int, username: Optional[str]) -> None:
+        """Ник в Telegram (без @). Обновляем при каждом нажатии «Я оплатил(а)»."""
+        self.conn.execute("UPDATE clients SET username=? WHERE tg_id=?", (username, tg_id))
+        self.conn.commit()
+
+    def get_username(self, tg_id: int) -> Optional[str]:
+        r = self.conn.execute("SELECT username FROM clients WHERE tg_id=?", (tg_id,)).fetchone()
+        return r["username"] if r else None
 
     def get_client(self, tg_id: int) -> Optional[Client]:
         r = self.conn.execute("SELECT * FROM clients WHERE tg_id=?", (tg_id,)).fetchone()

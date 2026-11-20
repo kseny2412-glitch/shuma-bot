@@ -308,6 +308,7 @@ async def claim_paid(cb: CallbackQuery, db: Database, cfg: Config, bot: Bot):
     await cb.message.edit_reply_markup(reply_markup=None)
     await cb.message.answer("Спасибо! Шума проверит поступление и подтвердит запись. "
                             "Мы напишем вам здесь.")
+    db.set_username(order.tg_id, cb.from_user.username)
     client = db.get_client(order.tg_id)
     offer = db.get_offer(order.offer_id)
     for admin in cfg.admin_ids:

@@ -69,7 +69,8 @@ _uid = iter(range(1, 10**6))
 
 
 def user(uid):
-    return User(id=uid, is_bot=False, first_name="u")
+    return User(id=uid, is_bot=False, first_name="u",
+                username="masha_dance" if uid == USER else None)
 
 
 async def say(dp, bot, uid, text=None, contact=None):
@@ -129,6 +130,17 @@ async def test_full_path(env, db):
     await press(dp, bot, ADMIN, f"adm_ok:{order_id}")
     assert db.get_order(order_id).status == "paid"
     assert "вы записаны" in s.texts(USER)[-1]
+    card = s.texts(ADMIN)[-1]
+    assert "Новый ученик записан" in card and f"tg://user?id={USER}" in card
+    assert "@masha_dance" in card and "4 500 ₽" in card
+
+
+def test_enrolled_card_without_username_and_html():
+    from app.db import Client
+    from types import SimpleNamespace
+    c = Client(5, "Иванова <Анна>", "01.01.2000", "+79990000000", "a@b.ru", False)
+    t = admin.enrolled_card(c, None, SimpleNamespace(title="Курс & ко"), 1000, "Шума")
+    assert "&lt;Анна&gt;" in t and "Курс &amp; ко" in t and "ника нет" in t
 
 
 async def test_non_admin_cannot_use_admin(env, db):

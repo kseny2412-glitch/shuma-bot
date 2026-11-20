@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
+from html import escape
 
 from aiogram import Bot, F, Router
 from aiogram.filters import BaseFilter, Command
@@ -16,6 +18,7 @@ from ..services import fmt_price
 from .client import kb
 
 router = Router(name="admin")
+log = logging.getLogger(__name__)
 
 
 class IsAdmin(BaseFilter):
@@ -190,7 +193,7 @@ async def pending(cb: CallbackQuery, db: Database):
 
 
 @router.callback_query(F.data.startswith(("adm_ok:", "adm_no:")))
-async def decide(cb: CallbackQuery, db: Database, bot: Bot):
+async def decide(cb: CallbackQuery, db: Database, cfg: Config, bot: Bot):
     action, oid = cb.data.split(":")
     order = db.get_order(int(oid))
     status = "paid" if action == "adm_ok" else "rejected"
@@ -207,6 +210,34 @@ async def decide(cb: CallbackQuery, db: Database, bot: Bot):
         text = (f"Мы не нашли оплату за «{offer.title}». Проверьте, пожалуйста, платёж "
                 f"или напишите Шуме.")
     await bot.send_message(order.tg_id, text)
+    if status == "paid":
+        await notify_enrolled(db, cfg, bot, order, offer, confirmed_by=cb.from_user)
+
+
+def enrolled_card(client, username, offer, amount, confirmed_by_name) -> str:
+    """Карточка нового ученика для админов: ник ссылкой и данные анкеты."""
+    name_link = f'<a href="tg://user?id={client.tg_id}">{escape(client.full_name)}</a>'
+    nick = f"@{escape(username)}" if username else "ника нет (откройте чат по имени выше)"
+    return (f"🎉 <b>Новый ученик записан</b>\n\n"
+            f"👤 {name_link}\n"
+            f"Telegram: {nick}\n"
+            f"📞 {escape(client.phone)}\n"
+            f"✉️ {escape(client.email)}\n"
+            f"🎂 {escape(client.birth_date)}\n\n"
+            f"Курс: «{escape(offer.title)}»\n"
+            f"Оплачено: {fmt_price(amount)} ₽\n"
+            f"Подтвердил(а): {escape(confirmed_by_name)}")
+
+
+async def notify_enrolled(db: Database, cfg: Config, bot: Bot, order, offer, confirmed_by):
+    client = db.get_client(order.tg_id)
+    text = enrolled_card(client, db.get_username(order.tg_id), offer, order.amount,
+                         confirmed_by.full_name)
+    for admin in cfg.admin_ids:
+        try:
+            await bot.send_message(admin, text)
+        except Exception:
+            log.warning("не удалось отправить карточку ученика админу %s", admin)
 
 
 @router.callback_query(F.data == "adm:csv")
