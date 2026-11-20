@@ -85,7 +85,7 @@ async def show_menu(msg: Message, db: Database):
     offers = db.list_offers(public_only=True)
     if not offers:
         return await msg.answer("Сейчас открытых курсов нет. Загляните позже!")
-    rows = [[(f"{o.title} — {fmt_price(o.price)} ₽", f"offer:{o.id}")] for o in offers]
+    rows = [[(o.title, f"offer:{o.id}")] for o in offers]
     await msg.answer("Выберите курс или занятие:", reply_markup=kb(*rows))
 
 

@@ -259,3 +259,20 @@ async def test_delete_offer_empty_and_with_orders(env, db):
     assert used.id not in [x.id for x in db.list_offers()]
     assert any(r["title"] == "Прошедший" for r in db.orders_report())   # CSV сохраняет
     await press(dp, bot, ADMIN, f"del_yes:{used.id}")    # повторно — без ошибок
+
+
+async def test_reorder_offers_and_menu_without_price(env, db):
+    dp, bot, s = env
+    a = db.create_offer("Первый", "course", 1000)
+    b = db.create_offer("Второй", "course", 2000)
+    c = db.create_offer("Третий", "course", 3000)
+    assert [o.title for o in db.list_offers()] == ["Третий", "Второй", "Первый"]  # новые сверху
+    await press(dp, bot, ADMIN, f"down:{c.id}")
+    assert [o.title for o in db.list_offers()] == ["Второй", "Третий", "Первый"]
+    await press(dp, bot, ADMIN, f"up:{a.id}")
+    assert [o.title for o in db.list_offers(public_only=True)] == ["Второй", "Первый", "Третий"]
+    assert db.move_offer(b.id, -1) == (1, 3)                       # край — остаётся на месте
+    await say(dp, bot, USER, "/start")
+    menu = [c for c in s.calls if getattr(c, "text", None) == "Выберите курс или занятие:"][-1]
+    labels = [row[0].text for row in menu.reply_markup.inline_keyboard]
+    assert labels == ["Второй", "Первый", "Третий"]

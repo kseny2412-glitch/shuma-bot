@@ -175,7 +175,19 @@ def offer_kb(oid: int, active: bool):
     btn = ("Скрыть", f"hide:{oid}") if active else ("Показать", f"show:{oid}")
     return kb([btn, ("👥 Ученики", f"stud:{oid}")],
               [("✏️ Число мест", f"seats:{oid}"), ("🧾 Записаны вне бота", f"offl:{oid}")],
+              [("⬆️ Выше", f"up:{oid}"), ("⬇️ Ниже", f"down:{oid}")],
               [("🗑 Удалить", f"del:{oid}")])
+
+
+@router.callback_query(F.data.startswith(("up:", "down:")))
+async def move(cb: CallbackQuery, db: Database):
+    action, oid = cb.data.split(":")
+    offer = db.get_offer(int(oid))
+    if not offer or offer.is_archived:
+        return await cb.answer("Курс удалён", show_alert=True)
+    pos, total = db.move_offer(offer.id, -1 if action == "up" else 1)
+    await cb.answer(f"«{offer.title}» теперь {pos}-й из {total}. "
+                    f"Новый порядок — в «Все предложения».", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("del:"))

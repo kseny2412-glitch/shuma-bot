@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS offers (
     is_active   INTEGER NOT NULL DEFAULT 1,
     offline_taken INTEGER NOT NULL DEFAULT 0,  -- записаны вне бота (занимают места)
     is_archived INTEGER NOT NULL DEFAULT 0,    -- «удалён» админом, но есть договоры
+    sort_order  INTEGER NOT NULL DEFAULT 0,    -- порядок в меню, меньше = выше
     link_token  TEXT NOT NULL UNIQUE,
     created_at  TEXT NOT NULL
 );
@@ -151,6 +152,10 @@ class Database:
         if "is_archived" not in cols:
             self.conn.execute(
                 "ALTER TABLE offers ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0")
+        if "sort_order" not in cols:  # сохраняем прежний порядок: новые сверху
+            self.conn.execute(
+                "ALTER TABLE offers ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
+            self.conn.execute("UPDATE offers SET sort_order = -id")
         self.conn.commit()
 
     # --- клиенты ---
@@ -194,8 +199,9 @@ class Database:
             raise ValueError("price must be positive")
         cur = self.conn.execute(
             """INSERT INTO offers (title, kind, price, schedule, address, seats,
-                   description, is_public, link_token, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   description, is_public, link_token, created_at, sort_order)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                       (SELECT COALESCE(MIN(sort_order), 0) - 1 FROM offers))""",
             (title, kind, price, schedule, address, seats, description,
              int(is_public), secrets.token_urlsafe(8), now_iso()),
         )
@@ -221,7 +227,7 @@ class Database:
         q = "SELECT * FROM offers WHERE is_archived=0"
         if public_only:
             q += " AND is_public=1 AND is_active=1"
-        q += " ORDER BY id DESC"
+        q += " ORDER BY sort_order, id DESC"
         return [self._offer(r) for r in self.conn.execute(q)]
 
     def remove_offer(self, offer_id: int) -> str:
@@ -239,6 +245,20 @@ class Database:
             result = "deleted"
         self.conn.commit()
         return result
+
+    def move_offer(self, offer_id: int, direction: int) -> tuple[int, int]:
+        """Сдвигает предложение на одну позицию (-1 вверх, +1 вниз) среди неархивных.
+        Возвращает (новая позиция с 1, всего)."""
+        ids = [o.id for o in self.list_offers()]
+        i = ids.index(offer_id)
+        j = i + direction
+        if 0 <= j < len(ids):
+            ids[i], ids[j] = ids[j], ids[i]
+            self.conn.executemany("UPDATE offers SET sort_order=? WHERE id=?",
+                                  [(n, oid) for n, oid in enumerate(ids)])
+            self.conn.commit()
+            i = j
+        return i + 1, len(ids)
 
     def set_offer_active(self, offer_id: int, active: bool) -> None:
         self.conn.execute("UPDATE offers SET is_active=? WHERE id=?", (int(active), offer_id))
