@@ -4,6 +4,7 @@
 # Скрипт сам спросит токен бота, Telegram ID админов, ключ SMS.ru и реквизиты ИП.
 # Повторный запуск обновляет код и перезапускает бота, не трогая данные и .env.
 set -euo pipefail
+export GIT_TERMINAL_PROMPT=0   # git не спрашивает логин/пароль, токен передаём сами
 
 REPO="github.com/kseny2412-glitch/shuma-bot"
 DIR=/opt/shuma-bot
