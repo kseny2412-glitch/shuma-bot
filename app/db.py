@@ -78,14 +78,6 @@ CREATE TABLE IF NOT EXISTS sign_codes (
     attempts   INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE TABLE IF NOT EXISTS lesson_slots (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    offer_id INTEGER NOT NULL REFERENCES offers(id) ON DELETE CASCADE,
-    starts_at TEXT NOT NULL,
-    enabled INTEGER NOT NULL DEFAULT 1,
-    UNIQUE (offer_id, starts_at)
-);
-
 -- Журнал подписаний: доказательство для споров, только добавление.
 CREATE TABLE IF NOT EXISTS signature_log (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -100,8 +92,6 @@ CREATE TABLE IF NOT EXISTS signature_log (
 """
 
 ACTIVE_ORDER_STATUSES = ("signed", "claimed", "paid")
-FREE_SLOT = """enabled=1 AND NOT EXISTS (SELECT 1 FROM orders
-               WHERE orders.slot_id=lesson_slots.id AND status IN ('signed','claimed','paid'))"""
 
 
 def now_iso() -> str:
@@ -148,7 +138,6 @@ class Order:
     status: str
     signed_at: str
     pdf_path: str
-    slot_id: int | None = None
 
 
 class Database:
@@ -164,10 +153,6 @@ class Database:
             self.conn.execute("ALTER TABLE clients ADD COLUMN username TEXT")
         if "number" not in {r[1] for r in self.conn.execute("PRAGMA table_info(contracts)")}:
             self.conn.execute("ALTER TABLE contracts ADD COLUMN number TEXT")
-        if "slot_id" not in {r[1] for r in self.conn.execute("PRAGMA table_info(orders)")}:
-            self.conn.execute("ALTER TABLE orders ADD COLUMN slot_id INTEGER REFERENCES lesson_slots(id)")
-        self.conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS booked_slot ON orders(slot_id)
-                             WHERE status IN ('signed','claimed','paid')""")
         cols = {r[1] for r in self.conn.execute("PRAGMA table_info(offers)")}
         if "offline_taken" not in cols:
             self.conn.execute(
@@ -302,7 +287,7 @@ class Database:
     def offer_students(self, offer_id: int) -> list[sqlite3.Row]:
         """Действующие записи на предложение (занимают место)."""
         return list(self.conn.execute(
-            f"""SELECT o.id, o.status, o.amount, o.slot_id, c.full_name, c.phone, c.username
+            f"""SELECT o.id, o.status, o.amount, c.full_name, c.phone, c.username
                FROM orders o JOIN clients c ON c.tg_id=o.tg_id
                WHERE o.offer_id=? AND o.status IN ({','.join('?' * len(ACTIVE_ORDER_STATUSES))})
                ORDER BY o.id""", (offer_id, *ACTIVE_ORDER_STATUSES)))
@@ -324,16 +309,14 @@ class Database:
         ).fetchone()
 
     def add_contract(self, tg_id: int, phone: str, sha: str, pdf_path: str,
-                     signed_at: str, sms_provider: str, number: Optional[str] = None,
-                     *, commit: bool = True) -> int:
+                     signed_at: str, sms_provider: str, number: Optional[str] = None) -> int:
         cur = self.conn.execute(
             "INSERT INTO contracts (tg_id, signed_at, phone, doc_sha256, pdf_path, number) "
             "VALUES (?,?,?,?,?,?)",
             (tg_id, signed_at, phone, sha, pdf_path, number),
         )
         self._log(tg_id, phone, "contract", cur.lastrowid, sha, signed_at, sms_provider)
-        if commit:
-            self.conn.commit()
+        self.conn.commit()
         return cur.lastrowid
 
     def next_contract_id(self) -> int:
@@ -362,48 +345,15 @@ class Database:
                                  (number,)).fetchone() is not None
 
     # --- заказы (заявки) ---
-    def add_slots(self, offer_id: int, starts: list[str]) -> int:
-        with self.conn:
-            cur = self.conn.executemany(
-                """INSERT INTO lesson_slots (offer_id, starts_at) VALUES (?,?)
-                   ON CONFLICT(offer_id, starts_at) DO UPDATE SET enabled=1 WHERE enabled=0""",
-                [(offer_id, start) for start in starts],
-            )
-        return cur.rowcount
-
-    def free_slots(self, offer_id: int, offset: int = 0, limit: int = 16) -> list[sqlite3.Row]:
-        return list(self.conn.execute(
-            f"""SELECT * FROM lesson_slots WHERE offer_id=? AND starts_at>? AND {FREE_SLOT}
-                ORDER BY starts_at LIMIT ? OFFSET ?""", (offer_id, now_iso(), limit, offset)))
-
-    def available_slot(self, offer_id: int, slot_id: int | None) -> sqlite3.Row | None:
-        return self.conn.execute(
-            f"""SELECT * FROM lesson_slots
-                WHERE id=? AND offer_id=? AND starts_at>? AND {FREE_SLOT}""",
-            (slot_id, offer_id, now_iso())).fetchone()
-
-    def remove_slot(self, offer_id: int, slot_id: int) -> bool:
-        with self.conn:
-            cur = self.conn.execute(
-                f"UPDATE lesson_slots SET enabled=0 WHERE id=? AND offer_id=? AND {FREE_SLOT}",
-                (slot_id, offer_id))
-        return cur.rowcount == 1
-
-    def slot_time(self, slot_id: int | None) -> str | None:
-        row = self.conn.execute("SELECT starts_at FROM lesson_slots WHERE id=?", (slot_id,)).fetchone()
-        return row[0] if row else None
-
     def add_order(self, tg_id: int, offer: Offer, phone: str, sha: str, pdf_path: str,
-                  signed_at: str, sms_provider: str, *, slot_id: int | None = None,
-                  commit: bool = True) -> int:
+                  signed_at: str, sms_provider: str) -> int:
         cur = self.conn.execute(
-            """INSERT INTO orders (tg_id, offer_id, amount, status, signed_at, doc_sha256, pdf_path, slot_id)
-               VALUES (?, ?, ?, 'signed', ?, ?, ?, ?)""",
-            (tg_id, offer.id, offer.price, signed_at, sha, pdf_path, slot_id),
+            """INSERT INTO orders (tg_id, offer_id, amount, status, signed_at, doc_sha256, pdf_path)
+               VALUES (?, ?, ?, 'signed', ?, ?, ?)""",
+            (tg_id, offer.id, offer.price, signed_at, sha, pdf_path),
         )
         self._log(tg_id, phone, "application", cur.lastrowid, sha, signed_at, sms_provider)
-        if commit:
-            self.conn.commit()
+        self.conn.commit()
         return cur.lastrowid
 
     def next_order_id(self) -> int:
@@ -414,7 +364,7 @@ class Database:
         if not r:
             return None
         return Order(r["id"], r["tg_id"], r["offer_id"], r["amount"], r["status"],
-                     r["signed_at"], r["pdf_path"], r["slot_id"])
+                     r["signed_at"], r["pdf_path"])
 
     def set_order_status(self, order_id: int, status: str, by: Optional[int] = None) -> bool:
         """Меняет статус по правилам. Возвращает False, если переход недопустим."""
@@ -442,7 +392,7 @@ class Database:
 
     def pending_orders(self) -> list[sqlite3.Row]:
         return list(self.conn.execute(
-            """SELECT o.id, o.amount, o.status, o.slot_id, f.title, c.full_name, c.phone
+            """SELECT o.id, o.amount, o.status, f.title, c.full_name, c.phone
                FROM orders o JOIN offers f ON f.id=o.offer_id JOIN clients c ON c.tg_id=o.tg_id
                WHERE o.status='claimed' ORDER BY o.id"""))
 

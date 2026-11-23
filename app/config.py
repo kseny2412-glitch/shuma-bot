@@ -38,8 +38,6 @@ class Config:
     smsru_from: str = ""
     timezone: str = "Europe/Moscow"
     executor: Executor = field(default_factory=Executor)
-    disk_token: str = field(default="", repr=False)
-    disk_path: str = ""
 
     @property
     def db_path(self) -> Path:
@@ -67,8 +65,6 @@ def load_config() -> Config:
         smsru_from=os.environ.get("SMSRU_FROM", "").strip(),
         data_dir=data_dir,
         timezone=os.environ.get("TIMEZONE", "Europe/Moscow"),
-        disk_token=os.environ.get("YANDEX_DISK_TOKEN", "").strip(),
-        disk_path=os.environ.get("YANDEX_DISK_PATH", "").strip(),
         executor=Executor(
             name=os.environ.get("EXECUTOR_NAME", ""),
             inn=os.environ.get("EXECUTOR_INN", ""),
