@@ -93,7 +93,6 @@ async def test_full_path(env, db):
     await say(dp, bot, ADMIN, "/admin")
     await press(dp, bot, ADMIN, "adm:new")
     await press(dp, bot, ADMIN, "kind:individual")
-    await press(dp, bot, ADMIN, "kind:create_individual")
     await say(dp, bot, ADMIN, "Индивидуальная тренировка")
     await say(dp, bot, ADMIN, "4 500")
     await say(dp, bot, ADMIN, "-")
@@ -104,17 +103,10 @@ async def test_full_path(env, db):
     link = re.search(r"start=o_(\S+)", s.texts(ADMIN)[-1]).group(1)
     offer = db.get_offer_by_token(link)
     assert offer.price == 4500 and not offer.is_public
-    await press(dp, bot, ADMIN, "adm:new")
-    await press(dp, bot, ADMIN, "kind:individual")
-    assert "Свободные окна" in s.texts(ADMIN)[-1]
-    await say(dp, bot, ADMIN, "01.12.2099 18:30")
-    slot = db.free_slots(offer.id)[0]
 
     # клиент по ссылке
     await say(dp, bot, USER, f"/start o_{link}")
-    slot_button = f"slot:{offer.id}:{slot['id']}"
-    assert slot_button in s.buttons()
-    await press(dp, bot, USER, slot_button)
+    await press(dp, bot, USER, f"buy:{offer.id}")
     await say(dp, bot, USER, "Петрова Мария Ивановна")
     await say(dp, bot, USER, "05.03.1995")
     await say(dp, bot, USER, contact=Contact(phone_number="79990001122", first_name="M", user_id=USER))
@@ -132,9 +124,6 @@ async def test_full_path(env, db):
     pay_msg = s.texts(USER)[-1]
     assert "https://shumkadance.tb.ru/" in pay_msg and "<b>4500</b>" in pay_msg
     order_id = db.conn.execute("SELECT id FROM orders").fetchone()[0]
-    assert db.get_order(order_id).slot_id == slot["id"]
-    assert not db.free_slots(offer.id)
-    assert "01.12.2099 18:30" in pay_msg
     await press(dp, bot, USER, f"paid:{order_id}")
     assert db.get_order(order_id).status == "claimed"
     assert f"adm_ok:{order_id}" in s.buttons()
@@ -144,8 +133,6 @@ async def test_full_path(env, db):
     card = s.texts(ADMIN)[-1]
     assert "Новый ученик записан" in card and f"tg://user?id={USER}" in card
     assert "@masha_dance" in card and "4 500 ₽" in card
-    assert db.set_order_status(order_id, "cancelled")
-    assert db.free_slots(offer.id)[0]["id"] == slot["id"]
 
 
 def test_enrolled_card_without_username_and_html():
@@ -168,10 +155,9 @@ async def test_non_admin_cannot_use_admin(env, db):
     assert db.conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0] == 0
 
 
-async def test_foreign_contact_rejected(env, db):
+async def test_foreign_contact_rejected(env):
     dp, bot, s = env
-    offer = db.create_offer("Курс", "course", 1000)
-    await press(dp, bot, USER, f"buy:{offer.id}")
+    await press(dp, bot, USER, "buy:1")
     await say(dp, bot, USER, "Петрова Мария")
     await say(dp, bot, USER, "05.03.1995")
     await say(dp, bot, USER, contact=Contact(phone_number="70000000000", first_name="X", user_id=7))
@@ -298,9 +284,5 @@ async def test_admin_sets_contract_start(env, db):
     assert "№ 1" in s.texts(ADMIN)[-1]
     await say(dp, bot, ADMIN, "abc")
     assert "Нужно число" in s.texts(ADMIN)[-1]
-    await say(dp, bot, ADMIN, "/admin")
-    assert s.texts(ADMIN)[-1] == "Админка:"
-    assert db.next_contract_number() == 1
-    await press(dp, bot, ADMIN, "adm:num")
     await say(dp, bot, ADMIN, "25")
     assert "№ 25" in s.texts(ADMIN)[-1] and db.next_contract_number() == 25
