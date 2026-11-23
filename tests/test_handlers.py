@@ -295,5 +295,9 @@ async def test_admin_sets_contract_start(env, db):
     assert "№ 1" in s.texts(ADMIN)[-1]
     await say(dp, bot, ADMIN, "abc")
     assert "Нужно число" in s.texts(ADMIN)[-1]
+    await say(dp, bot, ADMIN, "/admin")
+    assert s.texts(ADMIN)[-1] == "Админка:"
+    assert db.next_contract_number() == 1
+    await press(dp, bot, ADMIN, "adm:num")
     await say(dp, bot, ADMIN, "25")
     assert "№ 25" in s.texts(ADMIN)[-1] and db.next_contract_number() == 25
