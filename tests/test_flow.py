@@ -27,7 +27,9 @@ def test_second_purchase_only_application(db, cfg, client):
     assert d2.contract_text is None
     assert d2.order_no.endswith("/2")
     assert d2.contract_no in d2.application_text
-    signed = sign_draft(db, cfg, client, o2, d2, "console")
+    db.add_slots(o2.id, ["2099-12-01T15:30:00+00:00"])
+    slot = db.free_slots(o2.id)[0]
+    signed = sign_draft(db, cfg, client, o2, d2, "console", slot_id=slot["id"])
     assert len(signed.files) == 1
     assert db.conn.execute("SELECT COUNT(*) FROM contracts").fetchone()[0] == 1
 
