@@ -93,6 +93,7 @@ async def test_full_path(env, db):
     await say(dp, bot, ADMIN, "/admin")
     await press(dp, bot, ADMIN, "adm:new")
     await press(dp, bot, ADMIN, "kind:individual")
+    await press(dp, bot, ADMIN, "kind:create_individual")
     await say(dp, bot, ADMIN, "Индивидуальная тренировка")
     await say(dp, bot, ADMIN, "4 500")
     await say(dp, bot, ADMIN, "-")
@@ -103,7 +104,9 @@ async def test_full_path(env, db):
     link = re.search(r"start=o_(\S+)", s.texts(ADMIN)[-1]).group(1)
     offer = db.get_offer_by_token(link)
     assert offer.price == 4500 and not offer.is_public
-    await press(dp, bot, ADMIN, f"adm_slots:{offer.id}")
+    await press(dp, bot, ADMIN, "adm:new")
+    await press(dp, bot, ADMIN, "kind:individual")
+    assert "Свободные окна" in s.texts(ADMIN)[-1]
     await say(dp, bot, ADMIN, "01.12.2099 18:30")
     slot = db.free_slots(offer.id)[0]
 
