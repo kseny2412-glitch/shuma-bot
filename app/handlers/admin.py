@@ -65,6 +65,12 @@ class ContractNum(StatesGroup):
     start = State()
 
 
+@router.message(Command("admin"))
+async def admin_menu(msg: Message, state: FSMContext):
+    await state.clear()
+    await msg.answer("Админка:", reply_markup=MENU)
+
+
 @router.callback_query(F.data == "adm:num")
 async def num_ask(cb: CallbackQuery, db: Database, state: FSMContext):
     await cb.answer()
@@ -87,12 +93,6 @@ async def num_set(msg: Message, db: Database, state: FSMContext):
     note = "" if t == SKIP or n == int(t) else \
         f" (номер {t} уже занят — меньше уже выданных номеров нельзя)"
     await msg.answer(f"Готово. Следующий договор получит № {n}{note}.")
-
-
-@router.message(Command("admin"))
-async def admin_menu(msg: Message, state: FSMContext):
-    await state.clear()
-    await msg.answer("Админка:", reply_markup=MENU)
 
 
 def offer_link(bot_username: str, token: str) -> str:
