@@ -4,7 +4,9 @@ from __future__ import annotations
 import csv
 import io
 import logging
+from datetime import datetime, timezone
 from html import escape
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot, F, Router
 from aiogram.filters import BaseFilter, Command
@@ -13,8 +15,8 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, CallbackQuery, Message, TelegramObject
 
 from ..config import Config
-from ..db import Database
-from ..services import fmt_price
+from ..db import Database, now_iso
+from ..services import fmt_price, slot_label
 from .client import kb
 
 router = Router(name="admin")
@@ -34,6 +36,10 @@ router.callback_query.filter(IsAdmin())
 class EditSeats(StatesGroup):
     value = State()
     offline = State()
+
+
+class EditSlots(StatesGroup):
+    value = State()
 
 
 class NewOffer(StatesGroup):
@@ -178,6 +184,8 @@ async def nf_visibility(cb: CallbackQuery, state: FSMContext, db: Database, bot:
     await cb.message.answer(
         f"Готово: <b>{offer.title}</b>, {fmt_price(offer.price)} ₽ ({where}).\n\n"
         f"Ссылка для клиента:\n{offer_link(me.username, offer.link_token)}",
+        reply_markup=kb([("📅 Свободные окна", f"adm_slots:{offer.id}")])
+        if offer.kind == "individual" else None,
         disable_web_page_preview=True)
 
 
@@ -197,15 +205,76 @@ async def list_offers(cb: CallbackQuery, db: Database, bot: Bot):
         await cb.message.answer(
             f"<b>{o.title}</b> — {fmt_price(o.price)} ₽\n{o.kind_label}, {vis}, {status}{seats}\n"
             f"{offer_link(me.username, o.link_token)}",
-            reply_markup=offer_kb(o.id, o.is_active), disable_web_page_preview=True)
+            reply_markup=offer_kb(o.id, o.is_active, o.kind), disable_web_page_preview=True)
 
 
-def offer_kb(oid: int, active: bool):
+def offer_kb(oid: int, active: bool, kind: str = "course"):
     btn = ("Скрыть", f"hide:{oid}") if active else ("Показать", f"show:{oid}")
-    return kb([btn, ("👥 Ученики", f"stud:{oid}")],
-              [("✏️ Число мест", f"seats:{oid}"), ("🧾 Записаны вне бота", f"offl:{oid}")],
-              [("⬆️ Выше", f"up:{oid}"), ("⬇️ Ниже", f"down:{oid}")],
-              [("🗑 Удалить", f"del:{oid}")])
+    rows = [[btn, ("👥 Ученики", f"stud:{oid}")],
+            [("✏️ Число мест", f"seats:{oid}"), ("🧾 Записаны вне бота", f"offl:{oid}")],
+            [("⬆️ Выше", f"up:{oid}"), ("⬇️ Ниже", f"down:{oid}")],
+            [("🗑 Удалить", f"del:{oid}")]]
+    if kind == "individual":
+        rows.insert(1, [("📅 Свободные окна", f"adm_slots:{oid}")])
+    return kb(*rows)
+
+
+@router.callback_query(F.data.startswith("adm_slots:"))
+async def slots_menu(cb: CallbackQuery, db: Database, cfg: Config, state: FSMContext):
+    parts = cb.data.split(":")
+    offer = db.get_offer(int(parts[1]))
+    await cb.answer()
+    if not offer or offer.kind != "individual" or offer.is_archived:
+        return await cb.message.answer("Занятие недоступно.")
+    page = int(parts[2]) if len(parts) == 3 else 0
+    await state.clear()
+    await state.set_state(EditSlots.value)
+    await state.update_data(slot_offer_id=offer.id)
+    slots = db.free_slots(offer.id, page * 15)
+    rows = [[("Убрать " + slot_label(cfg, s["starts_at"]), f"adm_unslot:{offer.id}:{s['id']}")]
+            for s in slots[:15]]
+    if page:
+        rows.append([("← Назад", f"adm_slots:{offer.id}:{page - 1}")])
+    if len(slots) > 15:
+        rows.append([("Дальше →", f"adm_slots:{offer.id}:{page + 1}")])
+    await cb.message.answer(
+        f"Свободные окна — {escape(offer.title)}.\n"
+        f"Чтобы добавить время, отправь дату и время в формате ДД.ММ.ГГГГ ЧЧ:ММ "
+        f"({cfg.timezone}). Можно отправить несколько строк, по одному окну на строку.",
+        reply_markup=kb(*rows) if rows else None)
+
+
+@router.message(EditSlots.value, F.text)
+async def slots_add(msg: Message, db: Database, cfg: Config, state: FSMContext):
+    data = await state.get_data()
+    offer = db.get_offer(data["slot_offer_id"])
+    if not offer or offer.is_archived:
+        await state.clear()
+        return await msg.answer("Занятие недоступно. /admin")
+    zone = ZoneInfo(cfg.timezone)
+    try:
+        starts = [
+            datetime.strptime(line.strip(), "%d.%m.%Y %H:%M")
+            .replace(tzinfo=zone).astimezone(timezone.utc).isoformat(timespec="seconds")
+            for line in msg.text.splitlines() if line.strip()
+        ]
+    except ValueError:
+        return await msg.answer("Проверь формат каждой строки: ДД.ММ.ГГГГ ЧЧ:ММ.")
+    if not starts or any(start <= now_iso() for start in starts):
+        return await msg.answer("Укажи будущую дату и время.")
+    added = db.add_slots(offer.id, starts)
+    await msg.answer(f"Добавлено окон: {added}.",
+                     reply_markup=kb([("📅 Свободные окна", f"adm_slots:{offer.id}")]))
+
+
+@router.callback_query(F.data.startswith("adm_unslot:"))
+async def slots_remove(cb: CallbackQuery, db: Database):
+    _, offer_id, slot_id = cb.data.split(":")
+    if not db.remove_slot(int(offer_id), int(slot_id)):
+        return await cb.answer("Окно уже недоступно или занято.", show_alert=True)
+    await cb.answer("Окно убрано.")
+    await cb.message.edit_reply_markup(
+        reply_markup=kb([("📅 Обновить список", f"adm_slots:{offer_id}")]))
 
 
 @router.callback_query(F.data.startswith(("up:", "down:")))
@@ -253,9 +322,12 @@ async def delete_yes(cb: CallbackQuery, db: Database):
 @router.callback_query(F.data.startswith(("hide:", "show:")))
 async def toggle(cb: CallbackQuery, db: Database):
     action, oid = cb.data.split(":")
+    offer = db.get_offer(int(oid))
+    if not offer or offer.is_archived:
+        return await cb.answer("Предложение недоступно.", show_alert=True)
     db.set_offer_active(int(oid), action == "show")
     await cb.answer("Скрыто" if action == "hide" else "Снова доступно")
-    await cb.message.edit_reply_markup(reply_markup=offer_kb(int(oid), action == "show"))
+    await cb.message.edit_reply_markup(reply_markup=offer_kb(offer.id, action == "show", offer.kind))
 
 
 # ---------- ученики и места ----------
@@ -274,7 +346,7 @@ def seats_line(db: Database, offer) -> str:
 
 
 @router.callback_query(F.data.startswith("stud:"))
-async def students(cb: CallbackQuery, db: Database):
+async def students(cb: CallbackQuery, db: Database, cfg: Config):
     await cb.answer()
     offer = db.get_offer(int(cb.data.split(":")[1]))
     rows = db.offer_students(offer.id)
@@ -282,9 +354,11 @@ async def students(cb: CallbackQuery, db: Database):
                             + ("" if rows else "\nПока никто не записан."))
     for r in rows:
         nick = f" @{escape(r['username'])}" if r["username"] else ""
+        starts = db.slot_time(r["slot_id"])
         await cb.message.answer(
             f"{escape(r['full_name'])}{nick}, {escape(r['phone'])}\n"
-            f"{STATUS_NAMES.get(r['status'], r['status'])}, {fmt_price(r['amount'])} ₽",
+            f"{STATUS_NAMES.get(r['status'], r['status'])}, {fmt_price(r['amount'])} ₽"
+            + (f"\nВремя занятия: {slot_label(cfg, starts)}" if starts else ""),
             reply_markup=kb([("🚫 Отменить запись", f"cnl:{r['id']}")]))
 
 
@@ -362,14 +436,16 @@ async def seats_set(msg: Message, db: Database, state: FSMContext):
 # ---------- оплаты ----------
 
 @router.callback_query(F.data == "adm:pending")
-async def pending(cb: CallbackQuery, db: Database):
+async def pending(cb: CallbackQuery, db: Database, cfg: Config):
     await cb.answer()
     rows = db.pending_orders()
     if not rows:
         return await cb.message.answer("Нет оплат, ждущих подтверждения.")
     for r in rows:
+        starts = db.slot_time(r["slot_id"])
         await cb.message.answer(
-            f"{r['full_name']} ({r['phone']}): «{r['title']}», {fmt_price(r['amount'])} ₽",
+            f"{r['full_name']} ({r['phone']}): «{r['title']}», {fmt_price(r['amount'])} ₽"
+            + (f"\nВремя занятия: {slot_label(cfg, starts)}" if starts else ""),
             reply_markup=kb([("✅ Оплата получена", f"adm_ok:{r['id']}"),
                              ("❌ Не пришла", f"adm_no:{r['id']}")]))
 
@@ -388,6 +464,9 @@ async def decide(cb: CallbackQuery, db: Database, cfg: Config, bot: Bot):
         "\n\n✅ Подтверждено" if status == "paid" else "\n\n❌ Отклонено"))
     if status == "paid":
         text = f"🎉 Оплата за «{offer.title}» получена, вы записаны! До встречи на занятиях."
+        starts = db.slot_time(order.slot_id)
+        if starts:
+            text += f"\nВремя занятия: {slot_label(cfg, starts)}"
     else:
         text = (f"Мы не нашли оплату за «{offer.title}». Проверьте, пожалуйста, платёж "
                 f"или напишите Шуме.")
@@ -415,6 +494,9 @@ async def notify_enrolled(db: Database, cfg: Config, bot: Bot, order, offer, con
     client = db.get_client(order.tg_id)
     text = enrolled_card(client, db.get_username(order.tg_id), offer, order.amount,
                          confirmed_by.full_name)
+    starts = db.slot_time(order.slot_id)
+    if starts:
+        text += f"\nВремя занятия: {slot_label(cfg, starts)}"
     for admin in cfg.admin_ids:
         try:
             await bot.send_message(admin, text)

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 from aiogram import Bot, F, Router
 from aiogram.filters import CommandObject, CommandStart
@@ -15,7 +15,8 @@ from aiogram.types import (CallbackQuery, FSInputFile, InlineKeyboardButton,
 
 from ..config import ROOT, Config
 from ..db import Client, Database, Offer
-from ..services import NumberTaken, Draft, fmt_price, make_draft, preview_pdfs, sign_draft
+from ..services import (Draft, NumberTaken, SlotUnavailable, fmt_price, make_draft,
+                        preview_pdfs, sign_draft, slot_label)
 from ..signing import check_code, issue_code
 from ..sms import SmsError, SmsSender
 
@@ -65,14 +66,14 @@ def offer_card(db: Database, o: Offer) -> str:
 # ---------- старт и меню ----------
 
 @router.message(CommandStart())
-async def start(msg: Message, command: CommandObject, state: FSMContext, db: Database):
+async def start(msg: Message, command: CommandObject, state: FSMContext, db: Database, cfg: Config):
     await state.clear()
     arg = command.args or ""
     if arg.startswith("o_"):
         offer = db.get_offer_by_token(arg[2:])
         if offer and offer.is_active:
             await state.update_data(offer_id=offer.id)
-            return await open_offer(msg, state, db, offer)
+            return await open_offer(msg, db, offer, cfg)
         await msg.answer("Это предложение больше не действует. Посмотрите актуальные курсы ниже.")
     if WELCOME_PHOTO.exists():
         await msg.answer_photo(FSInputFile(WELCOME_PHOTO),
@@ -90,20 +91,31 @@ async def show_menu(msg: Message, db: Database):
 
 
 @router.callback_query(F.data.startswith("offer:"))
-async def offer_chosen(cb: CallbackQuery, state: FSMContext, db: Database):
+async def offer_chosen(cb: CallbackQuery, state: FSMContext, db: Database, cfg: Config):
     offer = db.get_offer(int(cb.data.split(":")[1]))
     await cb.answer()
     if not offer or not offer.is_active:
         return await cb.message.answer("Это предложение больше не действует.")
-    await state.update_data(offer_id=offer.id)
-    await open_offer(cb.message, state, db, offer, user_id=cb.from_user.id)
+    await state.clear()
+    await open_offer(cb.message, db, offer, cfg)
 
 
-async def open_offer(msg: Message, state: FSMContext, db: Database, offer: Offer,
-                     user_id: int | None = None):
+async def open_offer(msg: Message, db: Database, offer: Offer, cfg: Config, page: int = 0):
     left = db.seats_left(offer)
     if left == 0:
         return await msg.answer(offer_card(db, offer) + "\n\nК сожалению, мест больше нет.")
+    if offer.kind == "individual":
+        slots = db.free_slots(offer.id, page * 15)
+        if not slots and page == 0:
+            return await msg.answer(offer_card(db, offer) + "\n\nПока нет свободного времени.")
+        rows = [[(slot_label(cfg, s["starts_at"]), f"slot:{offer.id}:{s['id']}")]
+                for s in slots[:15]]
+        if page:
+            rows.append([("← Назад", f"slotpage:{offer.id}:{page - 1}")])
+        if len(slots) > 15:
+            rows.append([("Дальше →", f"slotpage:{offer.id}:{page + 1}")])
+        return await msg.answer(offer_card(db, offer) + "\n\nВыберите дату и время:",
+                                reply_markup=kb(*rows))
     await msg.answer(offer_card(db, offer),
                      reply_markup=kb([("Записаться", f"buy:{offer.id}")]))
 
@@ -111,7 +123,40 @@ async def open_offer(msg: Message, state: FSMContext, db: Database, offer: Offer
 @router.callback_query(F.data.startswith("buy:"))
 async def buy(cb: CallbackQuery, state: FSMContext, db: Database, cfg: Config):
     await cb.answer()
-    await state.update_data(offer_id=int(cb.data.split(":")[1]))
+    offer = db.get_offer(int(cb.data.split(":")[1]))
+    if not offer or not offer.is_active:
+        return await cb.message.answer("Это предложение больше не действует. /start")
+    if offer.kind == "individual":
+        return await open_offer(cb.message, db, offer, cfg)
+    await begin_purchase(cb, state, db, cfg, offer)
+
+
+@router.callback_query(F.data.startswith("slotpage:"))
+async def slot_page(cb: CallbackQuery, db: Database, cfg: Config):
+    _, offer_id, page = cb.data.split(":")
+    await cb.answer()
+    offer = db.get_offer(int(offer_id))
+    if offer and offer.is_active and offer.kind == "individual":
+        await open_offer(cb.message, db, offer, cfg, int(page))
+
+
+@router.callback_query(F.data.startswith("slot:"))
+async def choose_slot(cb: CallbackQuery, state: FSMContext, db: Database, cfg: Config):
+    _, offer_id, slot_id = cb.data.split(":")
+    await cb.answer()
+    offer = db.get_offer(int(offer_id))
+    if not offer or not offer.is_active or offer.kind != "individual":
+        return await cb.message.answer("Это предложение больше не действует. /start")
+    if not db.available_slot(offer.id, int(slot_id)):
+        await cb.message.answer("Это время уже недоступно. Выберите другое.")
+        return await open_offer(cb.message, db, offer, cfg)
+    await begin_purchase(cb, state, db, cfg, offer, int(slot_id))
+
+
+async def begin_purchase(cb: CallbackQuery, state: FSMContext, db: Database, cfg: Config,
+                         offer: Offer, slot_id: int | None = None):
+    await state.clear()
+    await state.update_data(offer_id=offer.id, slot_id=slot_id)
     client = db.get_client(cb.from_user.id)
     if not client:
         await state.set_state(Reg.name)
@@ -201,6 +246,7 @@ async def reg_photo(cb: CallbackQuery, state: FSMContext, db: Database, cfg: Con
     client = Client(cb.from_user.id, d["full_name"], d["birth_date"], d["phone"], d["email"],
                     cb.data.endswith("yes"))
     db.save_client(client)
+    db.set_username(client.tg_id, cb.from_user.username)
     await cb.message.answer("Спасибо, данные сохранены.")
     await send_draft(cb.message, state, db, cfg, client)
 
@@ -216,6 +262,13 @@ async def send_draft(msg: Message, state: FSMContext, db: Database, cfg: Config,
     if db.seats_left(offer) == 0:
         await state.clear()
         return await msg.answer("К сожалению, места закончились.")
+    if offer.kind == "individual":
+        slot = db.available_slot(offer.id, d.get("slot_id"))
+        if not slot:
+            await state.clear()
+            await msg.answer("Это время уже недоступно. Выберите другое.")
+            return await open_offer(msg, db, offer, cfg)
+        offer = replace(offer, schedule=slot_label(cfg, slot["starts_at"]))
     draft = make_draft(db, cfg, client, offer)
     await state.update_data(draft=asdict(draft))
     await state.set_state(Buy.review)
@@ -272,9 +325,20 @@ async def enter_code(msg: Message, state: FSMContext, db: Database, cfg: Config,
                                 reply_markup=kb([("Получить новый код", "sign")]))
     d = await state.get_data()
     offer = db.get_offer(d["offer_id"])
+    if not offer or not offer.is_active:
+        await state.clear()
+        return await msg.answer("Это предложение больше не действует. /start")
+    slot_id = d.get("slot_id")
+    starts = db.slot_time(slot_id)
+    if starts:
+        offer = replace(offer, schedule=slot_label(cfg, starts))
     draft = Draft(**d["draft"])
     try:
-        signed = sign_draft(db, cfg, client, offer, draft, sms.name)
+        signed = sign_draft(db, cfg, client, offer, draft, sms.name, slot_id=slot_id)
+    except SlotUnavailable:
+        await state.clear()
+        await msg.answer("Запись больше недоступна. Посмотрите актуальные варианты.")
+        return await open_offer(msg, db, offer, cfg)
     except NumberTaken:
         # редкий случай: два клиента подписывали одновременно — даём новый номер
         draft = make_draft(db, cfg, client, offer)
@@ -283,14 +347,15 @@ async def enter_code(msg: Message, state: FSMContext, db: Database, cfg: Config,
         for f in preview_pdfs(cfg, draft, client.tg_id):
             await msg.answer_document(FSInputFile(f))
         return await msg.answer(
-            f"Пока вы читали, номер договора обновился, теперь № {draft.contract_no}. "
-            f"Проверьте документы и подпишите ещё раз.",
+            f"Документы обновились. Номер договора — {draft.contract_no}. "
+            "Проверьте документы и подпишите ещё раз.",
             reply_markup=kb([("✍️ Подписать", "sign")], [("Отмена", "cancel")]))
     await state.clear()
     await msg.answer("✅ Подписано! Ваши экземпляры документов:")
     for f in signed.files:
         await msg.answer_document(FSInputFile(f))
     await msg.answer(
+        (f"Выбранное время: {offer.schedule}\n" if starts else "") +
         f"Осталось оплатить <b>{fmt_price(offer.price)} ₽</b>.\n\n"
         f"1. Откройте страницу оплаты: {cfg.payment_url}\n"
         f"2. В поле «Сумма заказа» введите <b>{offer.price}</b>.\n"
@@ -300,7 +365,8 @@ async def enter_code(msg: Message, state: FSMContext, db: Database, cfg: Config,
     for admin in cfg.admin_ids:
         try:
             await bot.send_message(
-                admin, f"✍️ {client.full_name} подписал(а) заявку «{offer.title}», "
+                admin, (f"Время занятия: {offer.schedule}\n" if starts else "") +
+                       f"✍️ {client.full_name} подписал(а) заявку «{offer.title}», "
                        f"{fmt_price(offer.price)} ₽. Ждём оплату.\n"
                        f"Телефон: {client.phone}, e-mail: {client.email}")
             for f in signed.files:
@@ -323,12 +389,14 @@ async def claim_paid(cb: CallbackQuery, db: Database, cfg: Config, bot: Bot):
     db.set_username(order.tg_id, cb.from_user.username)
     client = db.get_client(order.tg_id)
     offer = db.get_offer(order.offer_id)
+    starts = db.slot_time(order.slot_id)
     for admin in cfg.admin_ids:
         try:
             await bot.send_message(
                 admin,
                 f"💳 {client.full_name} ({client.phone}) сообщает об оплате "
-                f"«{offer.title}» — {fmt_price(order.amount)} ₽.\nПроверьте поступление.",
+                f"«{offer.title}» — {fmt_price(order.amount)} ₽.\nПроверьте поступление."
+                + (f"\nВремя занятия: {slot_label(cfg, starts)}" if starts else ""),
                 reply_markup=kb([("✅ Оплата получена", f"adm_ok:{order.id}"),
                                  ("❌ Не пришла", f"adm_no:{order.id}")]))
         except Exception:
