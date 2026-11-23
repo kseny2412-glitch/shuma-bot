@@ -105,14 +105,30 @@ def offer_link(bot_username: str, token: str) -> str:
 async def new_offer(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
     await state.set_state(NewOffer.kind)
-    await cb.message.answer("Что создаём?", reply_markup=kb(
+    await cb.message.answer("Что добавить?", reply_markup=kb(
         [("Групповой курс", "kind:course")], [("Индивидуальное занятие", "kind:individual")]))
 
 
-@router.callback_query(NewOffer.kind, F.data.startswith("kind:"))
+@router.callback_query(F.data == "kind:individual")
+async def individual_windows(cb: CallbackQuery, state: FSMContext, db: Database, cfg: Config):
+    await cb.answer()
+    await state.clear()
+    offers = [offer for offer in db.list_offers() if offer.kind == "individual"]
+    if len(offers) == 1:
+        return await show_slots(cb.message, db, cfg, state, offers[0])
+    rows = [[(offer.title, f"adm_slots:{offer.id}")] for offer in offers]
+    rows.append([("➕ Создать индивидуальное занятие", "kind:create_individual")])
+    prompt = "Выбери занятие, чтобы добавить время." if offers else (
+        "Сначала создай индивидуальное занятие. После этого можно добавить свободные окна.")
+    await cb.message.answer(prompt, reply_markup=kb(*rows))
+
+
+@router.callback_query(NewOffer.kind, F.data == "kind:course")
+@router.callback_query(F.data == "kind:create_individual")
 async def nf_kind(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
-    await state.update_data(kind=cb.data.split(":")[1])
+    await state.clear()
+    await state.update_data(kind="course" if cb.data == "kind:course" else "individual")
     await state.set_state(NewOffer.title)
     await cb.message.answer("Название (например: Интенсив «Бачата», 5 дней):")
 
@@ -227,6 +243,11 @@ async def slots_menu(cb: CallbackQuery, db: Database, cfg: Config, state: FSMCon
     if not offer or offer.kind != "individual" or offer.is_archived:
         return await cb.message.answer("Занятие недоступно.")
     page = int(parts[2]) if len(parts) == 3 else 0
+    await show_slots(cb.message, db, cfg, state, offer, page)
+
+
+async def show_slots(msg: Message, db: Database, cfg: Config, state: FSMContext,
+                     offer, page: int = 0):
     await state.clear()
     await state.set_state(EditSlots.value)
     await state.update_data(slot_offer_id=offer.id)
@@ -237,7 +258,7 @@ async def slots_menu(cb: CallbackQuery, db: Database, cfg: Config, state: FSMCon
         rows.append([("← Назад", f"adm_slots:{offer.id}:{page - 1}")])
     if len(slots) > 15:
         rows.append([("Дальше →", f"adm_slots:{offer.id}:{page + 1}")])
-    await cb.message.answer(
+    await msg.answer(
         f"Свободные окна — {escape(offer.title)}.\n"
         f"Чтобы добавить время, отправь дату и время в формате ДД.ММ.ГГГГ ЧЧ:ММ "
         f"({cfg.timezone}). Можно отправить несколько строк, по одному окну на строку.",
