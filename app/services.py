@@ -20,6 +20,11 @@ def fmt_price(rub: int) -> str:
     return f"{rub:,}".replace(",", " ")
 
 
+def slot_label(cfg: Config, starts_at: str) -> str:
+    local = datetime.fromisoformat(starts_at).astimezone(ZoneInfo(cfg.timezone))
+    return f"{local:%d.%m.%Y %H:%M} ({cfg.timezone})"
+
+
 @dataclass
 class Draft:
     """То, что клиент видит перед подписью. Подписывается ровно этот текст."""
@@ -75,6 +80,10 @@ class NumberTaken(Exception):
     """Пока клиент читал договор, этот номер получил другой клиент."""
 
 
+class SlotUnavailable(Exception):
+    """Время больше недоступно для записи."""
+
+
 @dataclass
 class Signed:
     order_id: int
@@ -82,27 +91,39 @@ class Signed:
 
 
 def sign_draft(db: Database, cfg: Config, client: Client, offer: Offer, draft: Draft,
-               provider: str) -> Signed:
+               provider: str, *, slot_id: int | None = None) -> Signed:
     """Вызывается только после верного кода. Пишет подписанные PDF и журнал."""
+    with db.conn:
+        db.conn.execute("BEGIN IMMEDIATE")
+        current = db.get_offer(offer.id)
+        if (not current or not current.is_active or db.seats_left(current) == 0
+                or (current.kind == "individual" and not db.available_slot(current.id, slot_id))):
+            raise SlotUnavailable
+        return _sign_documents(db, cfg, client, offer, draft, provider, slot_id)
+
+
+def _sign_documents(db: Database, cfg: Config, client: Client, offer: Offer, draft: Draft,
+                    provider: str, slot_id: int | None) -> Signed:
     signed_at = now_iso()
     human_time = f"{local_now(cfg):%d.%m.%Y %H:%M:%S %Z}"
     executor = f"ИП {cfg.executor.name}, ИНН {cfg.executor.inn}".strip()
     docs = cfg.docs_dir / str(client.tg_id)
     files: list[Path] = []
-    if draft.contract_text and not db.get_contract(client.tg_id):
-        if db.contract_number_taken(draft.contract_no):
+    if draft.contract_text:
+        if db.get_contract(client.tg_id) or db.contract_number_taken(draft.contract_no):
             raise NumberTaken(draft.contract_no)
         sha = text_sha256(draft.contract_text)
         path = docs / f"contract_{draft.contract_no}.pdf"
         write_pdf(draft.contract_text, path, SignatureStamp(
             client.full_name, client.phone, human_time, sha, secrets.token_hex(8), executor))
         db.add_contract(client.tg_id, client.phone, sha, str(path), signed_at, provider,
-                        number=draft.contract_no)
+                        number=draft.contract_no, commit=False)
         files.append(path)
     sha = text_sha256(draft.application_text)
     path = docs / f"application_{draft.order_no.replace('/', '_')}.pdf"
     write_pdf(draft.application_text, path, SignatureStamp(
         client.full_name, client.phone, human_time, sha, secrets.token_hex(8), executor))
-    order_id = db.add_order(client.tg_id, offer, client.phone, sha, str(path), signed_at, provider)
+    order_id = db.add_order(client.tg_id, offer, client.phone, sha, str(path), signed_at, provider,
+                            slot_id=slot_id, commit=False)
     files.append(path)
     return Signed(order_id, files)
