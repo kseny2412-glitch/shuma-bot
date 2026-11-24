@@ -15,6 +15,7 @@ from aiogram.types import (CallbackQuery, FSInputFile, InlineKeyboardButton,
 
 from ..config import ROOT, Config
 from ..db import Client, Database, Offer
+from ..yandex_disk import upload_file
 from ..services import NumberTaken, Draft, fmt_price, make_draft, preview_pdfs, sign_draft
 from ..signing import check_code, issue_code
 from ..sms import SmsError, SmsSender
@@ -290,6 +291,18 @@ async def enter_code(msg: Message, state: FSMContext, db: Database, cfg: Config,
     await msg.answer("✅ Подписано! Ваши экземпляры документов:")
     for f in signed.files:
         await msg.answer_document(FSInputFile(f))
+    # Загрузка договора на Яндекс.Диск
+    if cfg.yandex_disk_token and signed.files:
+        contract = next((f for f in signed.files if "contract_" in f.name), None)
+        if contract:
+            # Формат: номер_ФИО.pdf
+            safe_name = client.full_name.replace(" ", "_")
+            remote = f"disk:/Договоры/{draft.contract_no}_{safe_name}.pdf"
+            ok = await upload_file(cfg.yandex_disk_token, contract, remote)
+            if ok:
+                await msg.answer("Договор загружен на Яндекс.Диск.")
+            else:
+                log.warning("Не удалось загрузить договор на Яндекс.Диск")
     await msg.answer(
         f"Осталось оплатить <b>{fmt_price(offer.price)} ₽</b>.\n\n"
         f"1. Откройте страницу оплаты: {cfg.payment_url}\n"

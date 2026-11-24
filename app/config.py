@@ -36,6 +36,7 @@ class Config:
     smsru_api_key: str
     data_dir: Path
     smsru_from: str = ""
+    yandex_disk_token: str = ""
     timezone: str = "Europe/Moscow"
     executor: Executor = field(default_factory=Executor)
 
@@ -63,6 +64,7 @@ def load_config() -> Config:
         sms_provider=os.environ.get("SMS_PROVIDER", "console"),
         smsru_api_key=os.environ.get("SMSRU_API_KEY", ""),
         smsru_from=os.environ.get("SMSRU_FROM", "").strip(),
+        yandex_disk_token=os.environ.get("YANDEX_DISK_TOKEN", "").strip(),
         data_dir=data_dir,
         timezone=os.environ.get("TIMEZONE", "Europe/Moscow"),
         executor=Executor(
